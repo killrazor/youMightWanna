@@ -54,11 +54,13 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
 
       return `<tr
         data-status="${r.status.toLowerCase().replace('_', '')}"
-        data-date="${r.date_added}"
+        data-kevadded="${r.date_added}"
+        data-published="${r.nvd_published || ''}"
         data-cvss="${r.cvss_score ?? -1}"
         data-vendor="${escapeHtml(r.vendor.toLowerCase())}"
         data-product="${escapeHtml(r.product.toLowerCase())}"
         data-cve="${r.cve_id.toLowerCase()}"
+        data-ransomware="${escapeHtml(r.known_ransomware.toLowerCase())}"
       >
         <td><a href="https://nvd.nist.gov/vuln/detail/${r.cve_id}" class="cve-link" target="_blank" rel="noopener">${r.cve_id}</a></td>
         <td class="${cvssClass}">${cvssDisplay}</td>
@@ -66,6 +68,7 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
         <td>${escapeHtml(r.product)}</td>
         <td><span class="status ${statusClass}">${getStatusLabel(r.status)}</span></td>
         <td class="${ransomwareClass}">${escapeHtml(r.known_ransomware)}</td>
+        <td>${r.nvd_published || 'N/A'}</td>
         <td>${r.date_added}</td>
         <td class="description-cell">
           <span class="description-text" title="${escapeHtml(r.short_description)}">${escapeHtml(r.short_description.substring(0, 60))}${r.short_description.length > 60 ? '...' : ''}</span>
@@ -358,13 +361,14 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     <table id="resultsTable">
       <thead>
         <tr>
-          <th data-sort="cve" class="sorted" data-sort-dir="desc">CVE <span class="sort-indicator">↓</span></th>
+          <th data-sort="cve">CVE <span class="sort-indicator">↕</span></th>
           <th data-sort="cvss" data-sort-type="number">CVSS <span class="sort-indicator">↕</span></th>
           <th data-sort="vendor">Vendor <span class="sort-indicator">↕</span></th>
           <th data-sort="product">Product <span class="sort-indicator">↕</span></th>
           <th data-sort="status">Status <span class="sort-indicator">↕</span></th>
           <th data-sort="ransomware">Ransomware <span class="sort-indicator">↕</span></th>
-          <th data-sort="date">Added <span class="sort-indicator">↕</span></th>
+          <th data-sort="published">Published <span class="sort-indicator">↕</span></th>
+          <th data-sort="kevadded" class="sorted" data-sort-dir="desc">KEV Added <span class="sort-indicator">↓</span></th>
           <th>Description</th>
         </tr>
       </thead>
@@ -441,7 +445,7 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
         sortDir = sortDir === 'asc' ? 'desc' : 'asc';
       } else {
         currentSort = column;
-        sortDir = column === 'date' || column === 'cvss' || column === 'cve' ? 'desc' : 'asc';
+        sortDir = column === 'kevadded' || column === 'published' || column === 'cvss' || column === 'cve' ? 'desc' : 'asc';
       }
 
       // Update header indicators
@@ -502,8 +506,8 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       }
     });
 
-    // Initial sort by CVE descending (newest first)
-    sortTable('cve');
+    // Initial sort by KEV Added date descending (most recently added to KEV first)
+    sortTable('kevadded');
   </script>
 </body>
 </html>`;

@@ -86,11 +86,15 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
     const patchUrls: string[] = [];
     let cvssScore: number | null = null;
     let cvssSeverity: string | null = null;
+    let nvdPublished: string | null = null;
 
     const vulnerabilities = data.vulnerabilities || [];
     if (vulnerabilities.length > 0) {
       const cveData = vulnerabilities[0].cve || {};
       const references = cveData.references || [];
+
+      // Extract NVD published date
+      nvdPublished = cveData.published ? cveData.published.split('T')[0] : null;
 
       // Extract CVSS score (prefer v3.1, fall back to v3.0, then v2.0)
       const metrics = cveData.metrics || {};
@@ -139,6 +143,7 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
       patch_urls: patchUrls,
       cvss_score: cvssScore,
       cvss_severity: cvssSeverity,
+      nvd_published: nvdPublished,
       error: null,
     };
   } catch (e) {
@@ -150,6 +155,7 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
       patch_urls: [],
       cvss_score: null,
       cvss_severity: null,
+      nvd_published: null,
       error: e instanceof Error ? e.message : String(e),
     };
   }

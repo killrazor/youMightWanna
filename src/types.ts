@@ -27,6 +27,7 @@ export interface NvdResult {
   patch_urls: string[];
   cvss_score: number | null;
   cvss_severity: string | null;
+  nvd_published: string | null;
   error: string | null;
 }
 
