@@ -20,16 +20,16 @@ on:
         paths:
             - 'check_patch_status.py'
             - '.github/workflows/update-kev-status.yml'
+            - 'infra/**'
+            - 'docs/**'
 
-# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
     contents: write
-    pages: write
     id-token: write
 
 # Allow only one concurrent deployment
 concurrency:
-    group: 'pages'
+    group: 'deploy'
     cancel-in-progress: false
 
 jobs:
@@ -66,28 +66,107 @@ jobs:
                   git diff --staged --quiet || git commit -m "Update KEV patch status - $(date -u +'%Y-%m-%d %H:%M UTC')"
                   git push https://x-access-token:${{ secrets.PAT_TOKEN }}@github.com/killrazor/youMightWanna.git
 
-    deploy:
+    # Infrastructure provisioning with Terraform
+    infra:
+        name: Provision Infrastructure
         needs: update
         runs-on: ubuntu-latest
-
-        environment:
-            name: github-pages
-            url: ${{ steps.deployment.outputs.page_url }}
+        outputs:
+            cloudfront_distribution_id: ${{ steps.terraform_output.outputs.cloudfront_distribution_id }}
 
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
               with:
-                  ref: main # Get the latest commit after update job
+                  ref: main
 
-            - name: Setup Pages
-              uses: actions/configure-pages@v4
-
-            - name: Upload artifact
-              uses: actions/upload-pages-artifact@v3
+            - name: Set up Terraform
+              uses: hashicorp/setup-terraform@v3
               with:
-                  path: 'docs'
+                  terraform_version: "1.6.0"
+                  terraform_wrapper: false
 
-            - name: Deploy to GitHub Pages
-              id: deployment
-              uses: actions/deploy-pages@v4
+            - name: Cache Terraform plugins
+              uses: actions/cache@v4
+              with:
+                  path: ~/.terraform.d/plugin-cache
+                  key: ${{ runner.os }}-terraform-${{ hashFiles('infra/**/*.tf') }}
+                  restore-keys: |
+                      ${{ runner.os }}-terraform-
+
+            - name: Terraform Init
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  AWS_REGION: ${{ secrets.AWS_REGION }}
+              run: |
+                  mkdir -p ~/.terraform.d/plugin-cache
+                  terraform init \
+                    -input=false \
+                    -backend-config="bucket=gh-action-terraform-state" \
+                    -backend-config="key=youmightwanna/terraform.tfstate" \
+                    -backend-config="region=us-east-1" \
+                    -backend-config="encrypt=true" \
+                    -backend-config="dynamodb_table=terraform-state-lock"
+
+            - name: Terraform Apply
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  AWS_REGION: ${{ secrets.AWS_REGION }}
+              run: |
+                  terraform apply -auto-approve \
+                    -var="bucket_name=${{ secrets.S3_BUCKET }}" \
+                    -var="domain_name=${{ secrets.DOMAIN }}" \
+                    -var="route53_zone_id=${{ secrets.ROUTE53_ZONE_ID }}" \
+                    -var="acm_certificate_arn=${{ secrets.ACM_CERT_ARN }}"
+
+            - name: Get Terraform Outputs
+              id: terraform_output
+              working-directory: infra
+              env:
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  AWS_REGION: ${{ secrets.AWS_REGION }}
+              run: |
+                  CLOUDFRONT_ID=$(terraform output -raw cloudfront_distribution_id)
+                  echo "cloudfront_distribution_id=$CLOUDFRONT_ID" >> $GITHUB_OUTPUT
+
+    # Deploy static files to S3 and invalidate CloudFront
+    deploy:
+        name: Deploy to S3/CloudFront
+        needs: infra
+        runs-on: ubuntu-latest
+
+        environment:
+            name: production
+            url: https://${{ secrets.DOMAIN }}
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+              with:
+                  ref: main
+
+            - name: Configure AWS credentials
+              uses: aws-actions/configure-aws-credentials@v4
+              with:
+                  aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+                  aws-region: ${{ secrets.AWS_REGION }}
+
+            - name: Sync to S3
+              run: |
+                  aws s3 sync docs/ s3://${{ secrets.S3_BUCKET }} --delete
+
+            - name: Invalidate CloudFront cache
+              run: |
+                  if [ -n "${{ needs.infra.outputs.cloudfront_distribution_id }}" ]; then
+                    aws cloudfront create-invalidation \
+                      --distribution-id "${{ needs.infra.outputs.cloudfront_distribution_id }}" \
+                      --paths "/*"
+                  else
+                    echo "No CloudFront distribution ID available; skipping invalidation."
+                  fi
