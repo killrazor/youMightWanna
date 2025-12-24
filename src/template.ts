@@ -1,22 +1,18 @@
 import type { CveResult, KevCatalog } from './types.js';
 
 const escapeHtml = (str: string): string =>
-  String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 
-function renderCveRow(r: CveResult, includeDescription = false): string {
-  const ransomwareClass = r.known_ransomware === 'Known' ? 'ransomware-yes' : '';
-  const desc = escapeHtml(r.short_description?.substring(0, 150) || '');
-
-  return `
-    <tr data-status="${r.status.toLowerCase().replace('_', '')}">
-      <td><a href="https://nvd.nist.gov/vuln/detail/${r.cve_id}" class="cve-link" target="_blank">${r.cve_id}</a></td>
-      <td>${escapeHtml(r.vendor)}</td>
-      <td>${escapeHtml(r.product)}</td>
-      ${includeDescription ? '' : `<td><span class="status status-${r.status.toLowerCase().replace('_', '-')}">${getStatusLabel(r.status)}</span></td>`}
-      <td class="${ransomwareClass}">${escapeHtml(r.known_ransomware)}</td>
-      <td>${r.date_added}</td>
-      ${includeDescription ? `<td class="description">${desc}...</td>` : ''}
-    </tr>`;
+function getCvssClass(score: number | null): string {
+  if (score === null) return '';
+  if (score >= 9.0) return 'cvss-critical';
+  if (score >= 7.0) return 'cvss-high';
+  if (score >= 4.0) return 'cvss-medium';
+  return 'cvss-low';
 }
 
 function getStatusLabel(status: string): string {
@@ -29,64 +25,80 @@ function getStatusLabel(status: string): string {
   return labels[status] || status;
 }
 
-function renderSection(
-  title: string,
-  emoji: string,
-  badgeClass: string,
-  badgeText: string,
-  description: string,
-  rows: CveResult[]
-): string {
-  if (rows.length === 0) return '';
-
-  return `
-    <div class="section">
-      <div class="section-header">
-        <h2 class="section-title">${emoji} ${title}</h2>
-        <span class="badge ${badgeClass}">${badgeText}</span>
-      </div>
-      <p style="color: var(--text-secondary); margin-bottom: 15px;">${description}</p>
-      <table>
-        <thead>
-          <tr>
-            <th>CVE</th>
-            <th>Vendor</th>
-            <th>Product</th>
-            <th>Ransomware</th>
-            <th>Date Added</th>
-            <th>Description</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${rows.map((r) => renderCveRow(r, true)).join('')}
-        </tbody>
-      </table>
-    </div>`;
-}
-
 export function generateHtml(results: CveResult[], kevData: KevCatalog): string {
   const total = results.length;
   const patched = results.filter((r) => r.status === 'PATCHED').length;
   const mitigationOnly = results.filter((r) => r.status === 'MITIGATION_ONLY').length;
   const unpatched = results.filter((r) => r.status === 'UNPATCHED').length;
 
+  // Sort by date_added descending (newest first), then by status
   const statusOrder: Record<string, number> = { UNPATCHED: 0, MITIGATION_ONLY: 1, ERROR: 2, PATCHED: 3 };
-  const sortedResults = [...results].sort(
-    (a, b) => (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99) || a.cve_id.localeCompare(b.cve_id)
-  );
-
-  const unpatchedList = sortedResults.filter((r) => r.status === 'UNPATCHED');
-  const mitigationList = sortedResults.filter((r) => r.status === 'MITIGATION_ONLY');
+  const sortedResults = [...results].sort((a, b) => {
+    // First by date (newest first)
+    const dateCompare = b.date_added.localeCompare(a.date_added);
+    if (dateCompare !== 0) return dateCompare;
+    // Then by status
+    return (statusOrder[a.status] ?? 99) - (statusOrder[b.status] ?? 99);
+  });
 
   const now = new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC';
   const kevCount = kevData.vulnerabilities?.length || 0;
+
+  // Generate table rows with all data attributes for sorting/filtering
+  const tableRows = sortedResults
+    .map((r) => {
+      const statusClass = `status-${r.status.toLowerCase().replace('_', '-')}`;
+      const ransomwareClass = r.known_ransomware === 'Known' ? 'ransomware-yes' : '';
+      const cvssClass = getCvssClass(r.cvss_score);
+      const cvssDisplay = r.cvss_score !== null ? r.cvss_score.toFixed(1) : 'N/A';
+
+      return `<tr
+        data-status="${r.status.toLowerCase().replace('_', '')}"
+        data-date="${r.date_added}"
+        data-cvss="${r.cvss_score ?? -1}"
+        data-vendor="${escapeHtml(r.vendor.toLowerCase())}"
+        data-product="${escapeHtml(r.product.toLowerCase())}"
+        data-cve="${r.cve_id.toLowerCase()}"
+      >
+        <td><a href="https://nvd.nist.gov/vuln/detail/${r.cve_id}" class="cve-link" target="_blank" rel="noopener">${r.cve_id}</a></td>
+        <td class="${cvssClass}">${cvssDisplay}</td>
+        <td>${escapeHtml(r.vendor)}</td>
+        <td>${escapeHtml(r.product)}</td>
+        <td><span class="status ${statusClass}">${getStatusLabel(r.status)}</span></td>
+        <td class="${ransomwareClass}">${escapeHtml(r.known_ransomware)}</td>
+        <td>${r.date_added}</td>
+        <td class="description-cell">
+          <span class="description-text" title="${escapeHtml(r.short_description)}">${escapeHtml(r.short_description.substring(0, 60))}${r.short_description.length > 60 ? '...' : ''}</span>
+        </td>
+      </tr>`;
+    })
+    .join('');
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>KEV Unpatched Vulnerabilities Tracker</title>
+
+  <!-- SEO Meta Tags -->
+  <title>KEV Unpatched Vulnerabilities | CISA Known Exploited CVEs Without Patches</title>
+  <meta name="description" content="Track ${unpatched} actively exploited vulnerabilities from CISA's KEV catalog that have no vendor patch available. Updated daily with CVSS scores and patch status.">
+  <meta name="keywords" content="CISA KEV, unpatched vulnerabilities, zero-day, CVE, security, exploited vulnerabilities, no patch available">
+  <meta name="author" content="youmightwanna.org">
+  <link rel="canonical" href="https://youmightwanna.org/">
+
+  <!-- Open Graph / Social -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://youmightwanna.org/">
+  <meta property="og:title" content="KEV Unpatched Vulnerabilities Tracker">
+  <meta property="og:description" content="${unpatched} actively exploited vulnerabilities with no vendor patch. Track CISA KEV entries that can't be patched - only mitigated.">
+  <meta property="og:image" content="https://youmightwanna.org/og-image.png">
+
+  <!-- Twitter -->
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="KEV Unpatched Vulnerabilities Tracker">
+  <meta name="twitter:description" content="${unpatched} actively exploited vulnerabilities with no vendor patch available.">
+
   <style>
     :root {
       --bg-primary: #0d1117;
@@ -96,9 +108,11 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       --text-secondary: #8b949e;
       --border-color: #30363d;
       --red: #f85149;
+      --orange: #db6d28;
       --yellow: #d29922;
       --green: #3fb950;
       --blue: #58a6ff;
+      --purple: #a371f7;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -111,7 +125,7 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       padding: 20px;
     }
 
-    .container { max-width: 1400px; margin: 0 auto; }
+    .container { max-width: 1600px; margin: 0 auto; }
 
     header {
       text-align: center;
@@ -124,9 +138,28 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     .subtitle { color: var(--text-secondary); font-size: 1.1rem; }
     .last-updated { color: var(--text-secondary); font-size: 0.9rem; margin-top: 15px; }
 
+    /* Search at top */
+    .search-container {
+      max-width: 600px;
+      margin: 0 auto 30px;
+    }
+
+    .search-box {
+      width: 100%;
+      padding: 12px 20px;
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-secondary);
+      color: var(--text-primary);
+      border-radius: 8px;
+      font-size: 1rem;
+    }
+
+    .search-box:focus { outline: none; border-color: var(--blue); }
+    .search-box::placeholder { color: var(--text-secondary); }
+
     .stats {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
       gap: 20px;
       margin-bottom: 40px;
     }
@@ -140,29 +173,29 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     }
 
     .stat-number { font-size: 2.5rem; font-weight: bold; }
-    .stat-label { color: var(--text-secondary); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px; }
+    .stat-label { color: var(--text-secondary); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }
 
     .stat-card.unpatched .stat-number { color: var(--red); }
     .stat-card.mitigation .stat-number { color: var(--yellow); }
     .stat-card.patched .stat-number { color: var(--green); }
     .stat-card.total .stat-number { color: var(--blue); }
 
-    .section { margin-bottom: 40px; }
+    .filter-controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
-    .section-header {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      margin-bottom: 20px;
-      padding-bottom: 10px;
-      border-bottom: 1px solid var(--border-color);
+    .filter-btn {
+      padding: 8px 16px;
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-secondary);
+      color: var(--text-primary);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
     }
 
-    .section-title { font-size: 1.5rem; }
+    .filter-btn:hover { background-color: var(--bg-tertiary); }
+    .filter-btn.active { background-color: var(--blue); border-color: var(--blue); color: white; }
 
-    .badge { padding: 4px 12px; border-radius: 20px; font-size: 0.85rem; font-weight: 500; }
-    .badge-red { background-color: rgba(248, 81, 73, 0.2); color: var(--red); }
-    .badge-yellow { background-color: rgba(210, 153, 34, 0.2); color: var(--yellow); }
+    .results-count { color: var(--text-secondary); margin-left: auto; }
 
     table {
       width: 100%;
@@ -173,7 +206,7 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     }
 
     th, td {
-      padding: 12px 16px;
+      padding: 12px 14px;
       text-align: left;
       border-bottom: 1px solid var(--border-color);
     }
@@ -183,7 +216,19 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       font-weight: 600;
       position: sticky;
       top: 0;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
     }
+
+    th:hover { background-color: #2d333b; }
+
+    th .sort-indicator {
+      margin-left: 5px;
+      opacity: 0.5;
+    }
+
+    th.sorted .sort-indicator { opacity: 1; }
 
     tr:hover { background-color: var(--bg-tertiary); }
 
@@ -205,7 +250,27 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
 
     .ransomware-yes { color: var(--red); font-weight: bold; }
 
-    .description { max-width: 400px; font-size: 0.9rem; color: var(--text-secondary); }
+    /* CVSS colors */
+    .cvss-critical { color: var(--purple); font-weight: bold; }
+    .cvss-high { color: var(--red); font-weight: bold; }
+    .cvss-medium { color: var(--orange); }
+    .cvss-low { color: var(--yellow); }
+
+    .description-cell { max-width: 300px; }
+    .description-text {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text-secondary);
+      font-size: 0.9rem;
+      cursor: help;
+    }
+
+    /* Tooltip */
+    .description-text:hover {
+      position: relative;
+    }
 
     footer {
       text-align: center;
@@ -227,37 +292,21 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       color: var(--text-secondary);
     }
 
-    .filter-controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; }
-
-    .filter-btn {
-      padding: 8px 16px;
-      border: 1px solid var(--border-color);
-      background-color: var(--bg-secondary);
-      color: var(--text-primary);
-      border-radius: 6px;
-      cursor: pointer;
-      transition: all 0.2s;
+    .no-results {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-secondary);
     }
 
-    .filter-btn:hover { background-color: var(--bg-tertiary); }
-    .filter-btn.active { background-color: var(--blue); border-color: var(--blue); color: white; }
-
-    .search-box {
-      padding: 8px 16px;
-      border: 1px solid var(--border-color);
-      background-color: var(--bg-secondary);
-      color: var(--text-primary);
-      border-radius: 6px;
-      width: 250px;
+    @media (max-width: 1200px) {
+      .description-cell { display: none; }
     }
-
-    .search-box:focus { outline: none; border-color: var(--blue); }
 
     @media (max-width: 768px) {
       .stats { grid-template-columns: repeat(2, 1fr); }
       table { font-size: 0.85rem; }
       th, td { padding: 8px 10px; }
-      .description { display: none; }
+      h1 { font-size: 1.8rem; }
     }
   </style>
 </head>
@@ -269,11 +318,8 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       <p class="last-updated">Last updated: ${now} | Total KEV entries: ${kevCount}</p>
     </header>
 
-    <div class="disclaimer">
-      <strong>Disclaimer:</strong> This tracker identifies CVEs from the CISA KEV catalog where the required action
-      mentions "mitigations" rather than "updates", suggesting a full patch may not be available. The patch status
-      is determined by checking NVD references for "Patch" tags. This is not a definitive source - always verify
-      with vendor security advisories.
+    <div class="search-container">
+      <input type="text" class="search-box" id="searchBox" placeholder="Search CVE, vendor, product, description..." autofocus>
     </div>
 
     <div class="stats">
@@ -295,72 +341,73 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       </div>
     </div>
 
-    ${renderSection(
-      'Likely Unpatched',
-      '🚨',
-      'badge-red',
-      'Action Required',
-      'These CVEs have no "Patch" reference in NVD. Consider taking affected systems offline or applying workarounds.',
-      unpatchedList
-    )}
+    <div class="disclaimer">
+      <strong>Disclaimer:</strong> This tracker identifies CVEs from the CISA KEV catalog where the required action
+      mentions "mitigations" rather than "updates", suggesting a full patch may not be available. Patch status
+      is determined by checking NVD references. This is not a definitive source - always verify with vendor advisories.
+    </div>
 
-    ${renderSection(
-      'Mitigation Only',
-      '⚠️',
-      'badge-yellow',
-      'Workarounds Available',
-      'These CVEs have vendor advisories or mitigations but no explicit patch reference in NVD.',
-      mitigationList
-    )}
+    <div class="filter-controls">
+      <button class="filter-btn active" data-filter="all">All</button>
+      <button class="filter-btn" data-filter="unpatched">Unpatched</button>
+      <button class="filter-btn" data-filter="mitigation">Mitigation Only</button>
+      <button class="filter-btn" data-filter="patched">Patched</button>
+      <span class="results-count"><span id="visibleCount">${total}</span> of ${total} shown</span>
+    </div>
 
-    <div class="section">
-      <div class="section-header">
-        <h2 class="section-title">All Checked CVEs</h2>
-      </div>
+    <table id="resultsTable">
+      <thead>
+        <tr>
+          <th data-sort="cve" class="sorted" data-sort-dir="desc">CVE <span class="sort-indicator">↓</span></th>
+          <th data-sort="cvss" data-sort-type="number">CVSS <span class="sort-indicator">↕</span></th>
+          <th data-sort="vendor">Vendor <span class="sort-indicator">↕</span></th>
+          <th data-sort="product">Product <span class="sort-indicator">↕</span></th>
+          <th data-sort="status">Status <span class="sort-indicator">↕</span></th>
+          <th data-sort="ransomware">Ransomware <span class="sort-indicator">↕</span></th>
+          <th data-sort="date">Added <span class="sort-indicator">↕</span></th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${tableRows}
+      </tbody>
+    </table>
 
-      <div class="filter-controls">
-        <input type="text" class="search-box" id="searchBox" placeholder="Search CVE, vendor, product...">
-        <button class="filter-btn active" data-filter="all">All</button>
-        <button class="filter-btn" data-filter="unpatched">Unpatched</button>
-        <button class="filter-btn" data-filter="mitigation">Mitigation Only</button>
-        <button class="filter-btn" data-filter="patched">Patched</button>
-      </div>
-
-      <table id="resultsTable">
-        <thead>
-          <tr>
-            <th>CVE</th>
-            <th>Vendor</th>
-            <th>Product</th>
-            <th>Status</th>
-            <th>Ransomware</th>
-            <th>Date Added</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${sortedResults.map((r) => renderCveRow(r, false)).join('')}
-        </tbody>
-      </table>
+    <div class="no-results" id="noResults" style="display: none;">
+      No vulnerabilities match your search criteria.
     </div>
 
     <footer>
-      <p>Data sourced from <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank">CISA KEV Catalog</a>
-      and <a href="https://nvd.nist.gov/" target="_blank">NIST NVD</a></p>
+      <p>Data sourced from <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener">CISA KEV Catalog</a>
+      and <a href="https://nvd.nist.gov/" target="_blank" rel="noopener">NIST NVD</a></p>
       <p style="margin-top: 10px;">This is an automated tracker. Verify all information with official vendor sources.</p>
+      <p style="margin-top: 10px;"><a href="https://github.com/killrazor/youMightWanna" target="_blank" rel="noopener">View on GitHub</a></p>
     </footer>
   </div>
 
   <script>
-    const filterBtns = document.querySelectorAll('.filter-btn');
-    const rows = document.querySelectorAll('#resultsTable tbody tr');
+    const table = document.getElementById('resultsTable');
+    const tbody = table.querySelector('tbody');
+    const rows = Array.from(tbody.querySelectorAll('tr'));
     const searchBox = document.getElementById('searchBox');
+    const filterBtns = document.querySelectorAll('.filter-btn');
+    const visibleCountEl = document.getElementById('visibleCount');
+    const noResultsEl = document.getElementById('noResults');
 
     let currentFilter = 'all';
     let currentSearch = '';
+    let currentSort = null;
+    let sortDir = 'desc';
 
     function applyFilters() {
+      let visibleCount = 0;
+      const searchLower = currentSearch.toLowerCase();
+
       rows.forEach(row => {
         const status = row.dataset.status;
+        const cve = row.dataset.cve;
+        const vendor = row.dataset.vendor;
+        const product = row.dataset.product;
         const text = row.textContent.toLowerCase();
 
         const matchesFilter = currentFilter === 'all' ||
@@ -368,12 +415,64 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
           (currentFilter === 'mitigation' && status === 'mitigationonly') ||
           (currentFilter === 'patched' && status === 'patched');
 
-        const matchesSearch = currentSearch === '' || text.includes(currentSearch.toLowerCase());
+        const matchesSearch = searchLower === '' ||
+          cve.includes(searchLower) ||
+          vendor.includes(searchLower) ||
+          product.includes(searchLower) ||
+          text.includes(searchLower);
 
-        row.style.display = matchesFilter && matchesSearch ? '' : 'none';
+        const visible = matchesFilter && matchesSearch;
+        row.style.display = visible ? '' : 'none';
+        if (visible) visibleCount++;
       });
+
+      visibleCountEl.textContent = visibleCount;
+      noResultsEl.style.display = visibleCount === 0 ? 'block' : 'none';
+      table.style.display = visibleCount === 0 ? 'none' : '';
     }
 
+    function sortTable(column) {
+      const headers = table.querySelectorAll('th[data-sort]');
+      const clickedHeader = table.querySelector(\`th[data-sort="\${column}"]\`);
+      const isNumeric = clickedHeader?.dataset.sortType === 'number';
+
+      // Toggle direction if same column
+      if (currentSort === column) {
+        sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        currentSort = column;
+        sortDir = column === 'date' || column === 'cvss' || column === 'cve' ? 'desc' : 'asc';
+      }
+
+      // Update header indicators
+      headers.forEach(h => {
+        h.classList.remove('sorted');
+        h.querySelector('.sort-indicator').textContent = '↕';
+      });
+      clickedHeader.classList.add('sorted');
+      clickedHeader.querySelector('.sort-indicator').textContent = sortDir === 'asc' ? '↑' : '↓';
+
+      // Sort rows
+      rows.sort((a, b) => {
+        let aVal = a.dataset[column] || '';
+        let bVal = b.dataset[column] || '';
+
+        if (isNumeric) {
+          aVal = parseFloat(aVal) || -1;
+          bVal = parseFloat(bVal) || -1;
+          return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
+        }
+
+        return sortDir === 'asc'
+          ? aVal.localeCompare(bVal)
+          : bVal.localeCompare(aVal);
+      });
+
+      // Re-append sorted rows
+      rows.forEach(row => tbody.appendChild(row));
+    }
+
+    // Event listeners
     filterBtns.forEach(btn => {
       btn.addEventListener('click', () => {
         filterBtns.forEach(b => b.classList.remove('active'));
@@ -387,6 +486,24 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       currentSearch = e.target.value;
       applyFilters();
     });
+
+    table.querySelectorAll('th[data-sort]').forEach(th => {
+      th.addEventListener('click', () => sortTable(th.dataset.sort));
+    });
+
+    // Keyboard shortcut: / to focus search
+    document.addEventListener('keydown', (e) => {
+      if (e.key === '/' && document.activeElement !== searchBox) {
+        e.preventDefault();
+        searchBox.focus();
+      }
+      if (e.key === 'Escape') {
+        searchBox.blur();
+      }
+    });
+
+    // Initial sort by CVE descending (newest first)
+    sortTable('cve');
   </script>
 </body>
 </html>`;

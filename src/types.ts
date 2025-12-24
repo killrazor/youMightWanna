@@ -25,6 +25,8 @@ export interface NvdResult {
   has_vendor_advisory: boolean;
   has_mitigation: boolean;
   patch_urls: string[];
+  cvss_score: number | null;
+  cvss_severity: string | null;
   error: string | null;
 }
 

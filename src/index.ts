@@ -26,7 +26,7 @@ const OUTPUT_DIR = 'docs';
 // Rate limiting: NVD allows 50 req/30s with API key, 5 req/30s without
 const API_KEY = process.env.NVD_API_KEY;
 const CONCURRENCY = API_KEY ? 5 : 2; // Reduced from 10 to be safer
-const DELAY_MS = API_KEY ? 1000 : 6500; // Increased delay
+const DELAY_MS = API_KEY ? 1200 : 6500; // Increased delay
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000; // Base delay for retries (exponential backoff)
 
@@ -84,11 +84,26 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
     let hasVendorAdvisory = false;
     let hasMitigation = false;
     const patchUrls: string[] = [];
+    let cvssScore: number | null = null;
+    let cvssSeverity: string | null = null;
 
     const vulnerabilities = data.vulnerabilities || [];
     if (vulnerabilities.length > 0) {
       const cveData = vulnerabilities[0].cve || {};
       const references = cveData.references || [];
+
+      // Extract CVSS score (prefer v3.1, fall back to v3.0, then v2.0)
+      const metrics = cveData.metrics || {};
+      if (metrics.cvssMetricV31?.[0]) {
+        cvssScore = metrics.cvssMetricV31[0].cvssData?.baseScore ?? null;
+        cvssSeverity = metrics.cvssMetricV31[0].cvssData?.baseSeverity ?? null;
+      } else if (metrics.cvssMetricV30?.[0]) {
+        cvssScore = metrics.cvssMetricV30[0].cvssData?.baseScore ?? null;
+        cvssSeverity = metrics.cvssMetricV30[0].cvssData?.baseSeverity ?? null;
+      } else if (metrics.cvssMetricV2?.[0]) {
+        cvssScore = metrics.cvssMetricV2[0].cvssData?.baseScore ?? null;
+        cvssSeverity = metrics.cvssMetricV2[0].baseSeverity ?? null;
+      }
 
       for (const ref of references) {
         const tags: string[] = ref.tags || [];
@@ -122,6 +137,8 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
       has_vendor_advisory: hasVendorAdvisory,
       has_mitigation: hasMitigation,
       patch_urls: patchUrls,
+      cvss_score: cvssScore,
+      cvss_severity: cvssSeverity,
       error: null,
     };
   } catch (e) {
@@ -131,6 +148,8 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
       has_vendor_advisory: false,
       has_mitigation: false,
       patch_urls: [],
+      cvss_score: null,
+      cvss_severity: null,
       error: e instanceof Error ? e.message : String(e),
     };
   }
