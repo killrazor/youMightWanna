@@ -2,59 +2,38 @@
 
 Automatically tracks CISA Known Exploited Vulnerabilities (KEV) that may lack vendor patches.
 
-## 🔗 Live Site
+## Live Site
 
-**[View the tracker →](https://YOUR_USERNAME.github.io/kev-tracker/)**
+**[View the tracker → youmightwanna.org](https://youmightwanna.org)**
 
 ## What This Does
 
 1. **Downloads** the latest [CISA KEV catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
 2. **Filters** CVEs where the required action mentions "mitigations" rather than "updates" (suggesting no full patch)
-3. **Checks** each CVE against the [NVD API](https://nvd.nist.gov/) for patch references
+3. **Checks** each CVE against the [NVD API](https://nvd.nist.gov/) for patch references (concurrently for speed)
 4. **Generates** a static HTML report showing:
-   - 🚨 **Unpatched** - No patch reference found in NVD
-   - ⚠️ **Mitigation Only** - Has vendor advisory but no explicit patch
-   - ✅ **Patched** - Patch reference found (KEV may be outdated)
-
-## Setup
-
-### 1. Fork/Clone This Repository
-
-```bash
-git clone https://github.com/YOUR_USERNAME/kev-tracker.git
-cd kev-tracker
-```
-
-### 2. Enable GitHub Pages
-
-1. Go to **Settings** → **Pages**
-2. Under "Build and deployment", select **GitHub Actions**
-
-### 3. (Optional) Add NVD API Key
-
-For faster updates (50 req/30s vs 5 req/30s):
-
-1. Get a free API key at [NVD API Key Request](https://nvd.nist.gov/developers/request-an-api-key)
-2. Go to **Settings** → **Secrets and variables** → **Actions**
-3. Add a new secret: `NVD_API_KEY` with your key
-
-### 4. Run the Workflow
-
-- **Automatic**: Runs daily at 6 AM UTC
-- **Manual**: Go to **Actions** → **Update KEV Patch Status** → **Run workflow**
+   - **Unpatched** - No patch reference found in NVD
+   - **Mitigation Only** - Has vendor advisory but no explicit patch
+   - **Patched** - Patch reference found (KEV may be outdated)
 
 ## Local Development
 
 ```bash
 # Install dependencies
-pip install requests
+npm install
 
 # Run the checker (use --limit for testing)
-python check_patch_status.py --limit 10
+npm run build -- --limit 10
 
 # View the output
 open docs/index.html
 ```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `NVD_API_KEY` | Optional. NVD API key for faster rate limits (50 req/30s vs 5 req/30s). Get one at [NVD API Key Request](https://nvd.nist.gov/developers/request-an-api-key) |
 
 ## Output Files
 
@@ -69,12 +48,21 @@ The script checks NVD references for these tags:
 
 | NVD Reference Tag | Interpretation |
 |-------------------|----------------|
-| `Patch` | ✅ Vendor has released a patch |
-| `Vendor Advisory` | ⚠️ Vendor has guidance (may or may not include patch) |
-| `Mitigation` | ⚠️ Workaround available |
-| None of the above | 🚨 Likely unpatched |
+| `Patch` | Vendor has released a patch |
+| `Vendor Advisory` | Vendor has guidance (may or may not include patch) |
+| `Mitigation` | Workaround available |
+| None of the above | Likely unpatched |
 
-## ⚠️ Disclaimer
+## Infrastructure
+
+This project uses:
+- **AWS S3** - Static file hosting
+- **AWS CloudFront** - CDN with HTTPS
+- **AWS Route 53** - DNS for custom domain
+- **Terraform** - Infrastructure as code (see `infra/`)
+- **GitHub Actions** - CI/CD pipeline
+
+## Disclaimer
 
 This tracker is for informational purposes only. The patch status is determined algorithmically and may not be accurate. **Always verify with official vendor security advisories** before making security decisions.
 
@@ -85,4 +73,4 @@ This tracker is for informational purposes only. The patch status is determined 
 
 ## License
 
-MIT License - See [LICENSE](LICENSE) for details.
+MIT License

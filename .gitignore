@@ -7,6 +7,10 @@ __pycache__/
 venv/
 ENV/
 
+# Node/JS
+node_modules/
+dist/
+
 # IDE
 .vscode/
 .idea/

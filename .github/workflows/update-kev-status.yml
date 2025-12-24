@@ -18,7 +18,8 @@ on:
         branches:
             - main
         paths:
-            - 'check_patch_status.py'
+            - 'src/**'
+            - 'package.json'
             - '.github/workflows/update-kev-status.yml'
             - 'infra/**'
 
@@ -39,22 +40,23 @@ jobs:
             - name: Checkout repository
               uses: actions/checkout@v4
 
-            - name: Set up Python
-              uses: actions/setup-python@v5
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
               with:
-                  python-version: '3.11'
+                  node-version: '22'
+                  cache: 'npm'
 
             - name: Install dependencies
-              run: pip install requests
+              run: npm ci
 
             - name: Run KEV patch status checker
               env:
                   NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
               run: |
                   if [ -n "${{ inputs.limit }}" ]; then
-                    python check_patch_status.py --limit ${{ inputs.limit }}
+                    npm run build -- --limit ${{ inputs.limit }}
                   else
-                    python check_patch_status.py
+                    npm run build
                   fi
 
             - name: Upload build artifact
