@@ -25,8 +25,10 @@ const OUTPUT_DIR = 'docs';
 
 // Rate limiting: NVD allows 50 req/30s with API key, 5 req/30s without
 const API_KEY = process.env.NVD_API_KEY;
-const CONCURRENCY = API_KEY ? 10 : 2;
-const DELAY_MS = API_KEY ? 600 : 6000;
+const CONCURRENCY = API_KEY ? 5 : 2; // Reduced from 10 to be safer
+const DELAY_MS = API_KEY ? 1000 : 6500; // Increased delay
+const MAX_RETRIES = 3;
+const RETRY_DELAY_MS = 5000; // Base delay for retries (exponential backoff)
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -51,7 +53,7 @@ function filterMitigationCves(kevData: KevCatalog): KevVulnerability[] {
   return filtered;
 }
 
-async function checkNvdPatchStatus(cveId: string): Promise<NvdResult> {
+async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdResult> {
   const headers: Record<string, string> = {};
   if (API_KEY) headers['apiKey'] = API_KEY;
 
@@ -60,6 +62,17 @@ async function checkNvdPatchStatus(cveId: string): Promise<NvdResult> {
       headers,
       signal: AbortSignal.timeout(30000),
     });
+
+    // Handle rate limiting with retry
+    if (response.status === 429) {
+      if (retryCount < MAX_RETRIES) {
+        const delay = RETRY_DELAY_MS * Math.pow(2, retryCount); // Exponential backoff
+        process.stdout.write(` [429, retry in ${delay / 1000}s]`);
+        await sleep(delay);
+        return checkNvdPatchStatus(cveId, retryCount + 1);
+      }
+      throw new Error(`HTTP 429 after ${MAX_RETRIES} retries`);
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
