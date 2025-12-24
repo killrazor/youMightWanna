@@ -17,4 +17,5 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Don't ignore docs/ - that's our output!
+# Build output (deployed directly to S3)
+docs/
