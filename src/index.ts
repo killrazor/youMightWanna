@@ -259,6 +259,27 @@ async function main(): Promise<void> {
   await writeFile(`${OUTPUT_DIR}/data.json`, JSON.stringify(outputData, null, 2), 'utf-8');
   console.log(`      JSON data: ${OUTPUT_DIR}/data.json`);
 
+  // Generate sitemap.xml
+  const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://youmightwanna.org/</loc>
+    <lastmod>${new Date().toISOString().split('T')[0]}</lastmod>
+    <changefreq>daily</changefreq>
+    <priority>1.0</priority>
+  </url>
+</urlset>`;
+  await writeFile(`${OUTPUT_DIR}/sitemap.xml`, sitemap, 'utf-8');
+  console.log(`      Sitemap: ${OUTPUT_DIR}/sitemap.xml`);
+
+  // Generate robots.txt
+  const robots = `User-agent: *
+Allow: /
+
+Sitemap: https://youmightwanna.org/sitemap.xml`;
+  await writeFile(`${OUTPUT_DIR}/robots.txt`, robots, 'utf-8');
+  console.log(`      Robots: ${OUTPUT_DIR}/robots.txt`);
+
   console.log();
   console.log('[5/5] Summary');
   console.log('='.repeat(50));
