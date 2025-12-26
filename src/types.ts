@@ -70,22 +70,23 @@ export interface ThrottleState {
 }
 
 // Default throttle settings
-// NVD recommends 6-second delays between requests
+// With API key: 50 req/30s allows ~600ms delay
+// Without API key: 5 req/30s requires ~6000ms delay
 export const DEFAULT_THROTTLE: ThrottleState = {
-  concurrency: 1,
-  delay_ms: 6000,
+  concurrency: 5,
+  delay_ms: 700,
   last_429_at: null,
   last_success_at: null,
   consecutive_successes: 0,
   consecutive_429s: 0,
 };
 
-// Throttle bounds
+// Throttle bounds (for adaptive throttle with S3 cache)
 export const THROTTLE_BOUNDS = {
   min_concurrency: 1,
-  max_concurrency: 5,
-  min_delay_ms: 6000,
-  max_delay_ms: 15000,
+  max_concurrency: 10,
+  min_delay_ms: 600,
+  max_delay_ms: 10000,
   // Speed up after N consecutive successful runs
   speedup_threshold: 3,
   // How much to adjust on success/failure

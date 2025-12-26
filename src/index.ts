@@ -43,6 +43,9 @@ import { checkNvdPatchStatus, fetchRecentCves } from './nvd.js';
 const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 const OUTPUT_DIR = 'docs';
 
+// Rate limiting - API key allows 50 req/30s, without key allows 5 req/30s
+const API_KEY = process.env.NVD_API_KEY;
+
 // Adaptive throttle state - loaded from S3 or defaults
 let throttleState: ThrottleState = { ...DEFAULT_THROTTLE };
 let had429Error = false;
@@ -278,10 +281,17 @@ async function main(): Promise<void> {
     initS3Cache(s3Bucket, awsRegion);
     throttleState = await loadThrottleState();
   } else {
-    // Use NVD-recommended 6-second delays between requests
-    throttleState.concurrency = 1;
-    throttleState.delay_ms = 6000;
-    console.log(`      No S3 cache configured, using NVD-recommended defaults: concurrency=${throttleState.concurrency}, delay=${throttleState.delay_ms}ms`);
+    // Without S3 cache, use defaults based on API key presence
+    // With API key: 50 req/30s = ~600ms minimum delay (use 700ms for safety margin)
+    // Without API key: 5 req/30s = 6000ms minimum delay
+    if (API_KEY) {
+      throttleState.concurrency = 5;
+      throttleState.delay_ms = 700;
+    } else {
+      throttleState.concurrency = 1;
+      throttleState.delay_ms = 6000;
+    }
+    console.log(`      No S3 cache configured, using defaults: concurrency=${throttleState.concurrency}, delay=${throttleState.delay_ms}ms (API key: ${API_KEY ? 'yes' : 'no'})`);
   }
 
   const kevData = await downloadKev();
