@@ -443,6 +443,7 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       <p>Data sourced from <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener">CISA KEV Catalog</a>
       and <a href="https://nvd.nist.gov/" target="_blank" rel="noopener">NIST NVD</a></p>
       <p style="margin-top: 10px;">This is an automated tracker. Verify all information with official vendor sources.</p>
+      <p style="margin-top: 10px; font-size: 0.8rem; color: var(--text-secondary);">This product uses data from the NVD API but is not endorsed or certified by the NVD.</p>
       <p style="margin-top: 10px;"><a href="https://github.com/killrazor/youMightWanna" target="_blank" rel="noopener">View on GitHub</a></p>
     </footer>
   </div>

@@ -70,9 +70,10 @@ export interface ThrottleState {
 }
 
 // Default throttle settings
+// NVD recommends 6-second delays between requests
 export const DEFAULT_THROTTLE: ThrottleState = {
-  concurrency: 5,
-  delay_ms: 1200,
+  concurrency: 1,
+  delay_ms: 6000,
   last_429_at: null,
   last_success_at: null,
   consecutive_successes: 0,
@@ -82,9 +83,9 @@ export const DEFAULT_THROTTLE: ThrottleState = {
 // Throttle bounds
 export const THROTTLE_BOUNDS = {
   min_concurrency: 1,
-  max_concurrency: 10,
-  min_delay_ms: 600,
-  max_delay_ms: 10000,
+  max_concurrency: 5,
+  min_delay_ms: 6000,
+  max_delay_ms: 15000,
   // Speed up after N consecutive successful runs
   speedup_threshold: 3,
   // How much to adjust on success/failure
