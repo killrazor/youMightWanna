@@ -52,6 +52,10 @@ jobs:
             - name: Run KEV patch status checker
               env:
                   NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+                  S3_BUCKET: ${{ secrets.S3_BUCKET }}
+                  AWS_REGION: ${{ secrets.AWS_REGION }}
+                  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+                  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
               run: |
                   if [ -n "${{ inputs.limit }}" ]; then
                     npm run build -- --limit ${{ inputs.limit }}

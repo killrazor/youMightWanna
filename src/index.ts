@@ -10,25 +10,38 @@
  *
  * Environment Variables:
  *   NVD_API_KEY: Optional NVD API key for faster rate limits (50 req/30s vs 5 req/30s)
+ *   S3_BUCKET: S3 bucket for caching throttle state (optional, enables adaptive throttle)
+ *   AWS_REGION: AWS region (default: us-east-1)
  */
 
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import pLimit from 'p-limit';
-import type { KevCatalog, KevVulnerability, NvdResult, CveResult, OutputData } from './types.js';
+import type { KevCatalog, KevVulnerability, NvdResult, CveResult, OutputData, ThrottleState } from './types.js';
+import { DEFAULT_THROTTLE } from './types.js';
 import { generateHtml } from './template.js';
+import {
+  initS3Cache,
+  isCacheEnabled,
+  loadThrottleState,
+  saveThrottleState,
+  throttleBackoff,
+  throttleSpeedup,
+} from './cache.js';
 
 // Constants
 const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
 const NVD_API_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 const OUTPUT_DIR = 'docs';
 
-// Rate limiting: NVD allows 50 req/30s with API key, 5 req/30s without
+// Rate limiting
 const API_KEY = process.env.NVD_API_KEY;
-const CONCURRENCY = API_KEY ? 5 : 2; // Reduced from 10 to be safer
-const DELAY_MS = API_KEY ? 1200 : 6500; // Increased delay
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000; // Base delay for retries (exponential backoff)
+
+// Adaptive throttle state - loaded from S3 or defaults
+let throttleState: ThrottleState = { ...DEFAULT_THROTTLE };
+let had429Error = false;
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -163,17 +176,17 @@ async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdRe
 
 async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
   console.log('[3/5] Checking NVD for patch status...');
-  console.log(`      Using ${CONCURRENCY} concurrent requests with ${DELAY_MS}ms delay`);
+  console.log(`      Using ${throttleState.concurrency} concurrent requests with ${throttleState.delay_ms}ms delay`);
 
   const total = cves.length;
-  const estMinutes = ((total / CONCURRENCY) * DELAY_MS) / 60000;
+  const estMinutes = ((total / throttleState.concurrency) * throttleState.delay_ms) / 60000;
   console.log(`      Estimated time: ${estMinutes.toFixed(1)} minutes`);
 
-  const limit = pLimit(CONCURRENCY);
+  const limit = pLimit(throttleState.concurrency);
   const results: CveResult[] = [];
   let completed = 0;
 
-  const batchSize = CONCURRENCY;
+  const batchSize = throttleState.concurrency;
   for (let i = 0; i < cves.length; i += batchSize) {
     const batch = cves.slice(i, i + batchSize);
 
@@ -181,6 +194,11 @@ async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
       limit(async () => {
         const cveId = cve.cveID || '';
         const nvdResult = await checkNvdPatchStatus(cveId);
+
+        // Track 429 errors for adaptive throttle
+        if (nvdResult.error?.includes('429')) {
+          had429Error = true;
+        }
 
         completed++;
         const statusEmoji: Record<string, string> = {
@@ -212,7 +230,7 @@ async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
     results.push(...batchResults);
 
     if (i + batchSize < cves.length) {
-      await sleep(DELAY_MS);
+      await sleep(throttleState.delay_ms);
     }
   }
 
@@ -229,6 +247,19 @@ async function main(): Promise<void> {
   console.log('KEV Patch Status Checker');
   console.log('='.repeat(50));
   console.log();
+
+  // Initialize S3 cache if bucket is configured
+  const s3Bucket = process.env.S3_BUCKET;
+  const awsRegion = process.env.AWS_REGION || 'us-east-1';
+  if (s3Bucket) {
+    initS3Cache(s3Bucket, awsRegion);
+    throttleState = await loadThrottleState();
+  } else {
+    // Use defaults based on API key presence
+    throttleState.concurrency = API_KEY ? 5 : 2;
+    throttleState.delay_ms = API_KEY ? 1200 : 6500;
+    console.log(`      No S3 cache configured, using defaults: concurrency=${throttleState.concurrency}, delay=${throttleState.delay_ms}ms`);
+  }
 
   const kevData = await downloadKev();
   let cves = filterMitigationCves(kevData);
@@ -293,6 +324,19 @@ Sitemap: https://youmightwanna.org/sitemap.xml`;
   console.log(`   MITIGATION ONLY: ${outputData.summary.mitigation_only}`);
   console.log(`   PATCHED:         ${outputData.summary.patched}`);
   console.log(`   ERRORS:          ${outputData.summary.errors}`);
+
+  // Update and save throttle state if S3 cache is enabled
+  if (isCacheEnabled()) {
+    if (had429Error) {
+      console.log();
+      console.log('      Detected 429 errors - backing off throttle for next run');
+      throttleState = throttleBackoff(throttleState);
+    } else {
+      throttleState = throttleSpeedup(throttleState);
+    }
+    await saveThrottleState(throttleState);
+  }
+
   console.log();
   console.log('Done!');
 }

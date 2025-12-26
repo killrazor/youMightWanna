@@ -58,3 +58,36 @@ export interface OutputData {
   summary: Summary;
   vulnerabilities: CveResult[];
 }
+
+// Adaptive throttle state - persisted to S3
+export interface ThrottleState {
+  concurrency: number;
+  delay_ms: number;
+  last_429_at: string | null;
+  last_success_at: string | null;
+  consecutive_successes: number;
+  consecutive_429s: number;
+}
+
+// Default throttle settings
+export const DEFAULT_THROTTLE: ThrottleState = {
+  concurrency: 5,
+  delay_ms: 1200,
+  last_429_at: null,
+  last_success_at: null,
+  consecutive_successes: 0,
+  consecutive_429s: 0,
+};
+
+// Throttle bounds
+export const THROTTLE_BOUNDS = {
+  min_concurrency: 1,
+  max_concurrency: 10,
+  min_delay_ms: 600,
+  max_delay_ms: 10000,
+  // Speed up after N consecutive successful runs
+  speedup_threshold: 3,
+  // How much to adjust on success/failure
+  concurrency_step: 1,
+  delay_step_ms: 200,
+};
