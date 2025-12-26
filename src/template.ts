@@ -452,7 +452,8 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     const tbody = table.querySelector('tbody');
     const rows = Array.from(tbody.querySelectorAll('tr'));
     const searchBox = document.getElementById('searchBox');
-    const filterBtns = document.querySelectorAll('.filter-btn');
+    const kevContent = document.getElementById('kev-content');
+    const filterBtns = kevContent.querySelectorAll('.filter-btn');
     const visibleCountEl = document.getElementById('visibleCount');
     const noResultsEl = document.getElementById('noResults');
 

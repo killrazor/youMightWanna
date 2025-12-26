@@ -3,7 +3,7 @@
  *
  * Generates HTML and JavaScript for the Recent CVEs tab with:
  * - Flat table view (consistent with KEV tab)
- * - Button toggle filters for severity, patch status, KEV status
+ * - Accordion-style expanding filter button groups
  * - Shared search functionality
  */
 
@@ -22,23 +22,46 @@ export function generateRecentTabHtml(): string {
         <div class="recent-summary" id="recent-summary"></div>
 
         <div class="filter-controls" id="recent-filters">
-          <div class="filter-group">
-            <span class="filter-label">Severity:</span>
-            <button class="filter-btn active" data-severity="all">All</button>
-            <button class="filter-btn" data-severity="critical">Critical</button>
-            <button class="filter-btn" data-severity="high">High</button>
-            <button class="filter-btn" data-severity="medium">Medium</button>
-            <button class="filter-btn" data-severity="low">Low</button>
+          <div class="accordion-filter" data-filter-type="severity">
+            <button class="accordion-trigger" data-accordion="severity">
+              <span class="accordion-label">Severity</span>
+              <span class="accordion-value">All</span>
+              <span class="accordion-arrow">▶</span>
+            </button>
+            <div class="accordion-options" id="severity-options">
+              <button class="filter-opt active" data-value="all">All</button>
+              <button class="filter-opt" data-value="critical">Critical</button>
+              <button class="filter-opt" data-value="high">High</button>
+              <button class="filter-opt" data-value="medium">Medium</button>
+              <button class="filter-opt" data-value="low">Low</button>
+            </div>
           </div>
-          <div class="filter-group">
-            <span class="filter-label">Status:</span>
-            <button class="filter-btn active" data-patch="all">All</button>
-            <button class="filter-btn" data-patch="unpatched">No Patch</button>
-            <button class="filter-btn" data-patch="patched">Has Patch</button>
+
+          <div class="accordion-filter" data-filter-type="patch">
+            <button class="accordion-trigger" data-accordion="patch">
+              <span class="accordion-label">Patch Status</span>
+              <span class="accordion-value">All</span>
+              <span class="accordion-arrow">▶</span>
+            </button>
+            <div class="accordion-options" id="patch-options">
+              <button class="filter-opt active" data-value="all">All</button>
+              <button class="filter-opt" data-value="unpatched">No Patch</button>
+              <button class="filter-opt" data-value="patched">Has Patch</button>
+            </div>
           </div>
-          <div class="filter-group">
-            <button class="filter-btn" data-kev="true">In KEV Only</button>
+
+          <div class="accordion-filter" data-filter-type="kev">
+            <button class="accordion-trigger" data-accordion="kev">
+              <span class="accordion-label">KEV Status</span>
+              <span class="accordion-value">All</span>
+              <span class="accordion-arrow">▶</span>
+            </button>
+            <div class="accordion-options" id="kev-options">
+              <button class="filter-opt active" data-value="all">All CVEs</button>
+              <button class="filter-opt" data-value="kev">In KEV Only</button>
+            </div>
           </div>
+
           <span class="results-count"><span id="recentVisibleCount">0</span> of <span id="recentTotalCount">0</span> shown</span>
         </div>
 
@@ -106,16 +129,86 @@ export function generateRecentCss(): string {
       color: var(--text-secondary);
     }
 
-    .filter-group {
+    /* Accordion Filter Styles */
+    .accordion-filter {
+      display: flex;
+      align-items: center;
+      position: relative;
+    }
+
+    .accordion-trigger {
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      background-color: var(--bg-secondary);
+      color: var(--text-primary);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.875rem;
     }
 
-    .filter-label {
-      font-size: 0.875rem;
+    .accordion-trigger:hover {
+      background-color: var(--bg-tertiary);
+    }
+
+    .accordion-trigger.expanded {
+      border-color: var(--blue);
+      border-radius: 6px 0 0 6px;
+    }
+
+    .accordion-label {
       color: var(--text-secondary);
-      margin-right: 0.25rem;
+    }
+
+    .accordion-value {
+      font-weight: 500;
+    }
+
+    .accordion-arrow {
+      font-size: 0.7rem;
+      transition: transform 0.2s;
+      color: var(--text-secondary);
+    }
+
+    .accordion-trigger.expanded .accordion-arrow {
+      transform: rotate(90deg);
+    }
+
+    .accordion-options {
+      display: none;
+      align-items: center;
+    }
+
+    .accordion-filter.expanded .accordion-options {
+      display: flex;
+    }
+
+    .filter-opt {
+      padding: 8px 12px;
+      border: 1px solid var(--border-color);
+      border-left: none;
+      background-color: var(--bg-secondary);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: all 0.2s;
+      font-size: 0.875rem;
+    }
+
+    .filter-opt:last-child {
+      border-radius: 0 6px 6px 0;
+    }
+
+    .filter-opt:hover {
+      background-color: var(--bg-tertiary);
+    }
+
+    .filter-opt.active {
+      background-color: var(--blue);
+      border-color: var(--blue);
+      color: white;
     }
 
     .loading-placeholder {
@@ -178,10 +271,11 @@ export function generateRecentJs(): string {
       let recentFilters = {
         severity: 'all',
         patch: 'all',
-        kev: false
+        kev: 'all'
       };
       let recentSort = 'published';
       let recentSortDir = 'desc';
+      let expandedAccordion = null;
 
       // Lazy load recent.json when tab is clicked
       window.loadRecentCves = async function() {
@@ -284,33 +378,71 @@ export function generateRecentJs(): string {
       function setupRecentFilters() {
         const filterContainer = document.getElementById('recent-filters');
 
-        // Severity filters
-        filterContainer.querySelectorAll('[data-severity]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            filterContainer.querySelectorAll('[data-severity]').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            recentFilters.severity = btn.dataset.severity;
+        // Accordion triggers
+        filterContainer.querySelectorAll('.accordion-trigger').forEach(trigger => {
+          trigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const accordionType = trigger.dataset.accordion;
+            const parent = trigger.closest('.accordion-filter');
+
+            // If clicking the same one, toggle it
+            if (expandedAccordion === accordionType) {
+              parent.classList.remove('expanded');
+              trigger.classList.remove('expanded');
+              expandedAccordion = null;
+            } else {
+              // Close any open accordion
+              filterContainer.querySelectorAll('.accordion-filter').forEach(af => {
+                af.classList.remove('expanded');
+                af.querySelector('.accordion-trigger').classList.remove('expanded');
+              });
+
+              // Open this one
+              parent.classList.add('expanded');
+              trigger.classList.add('expanded');
+              expandedAccordion = accordionType;
+            }
+          });
+        });
+
+        // Filter option clicks
+        filterContainer.querySelectorAll('.filter-opt').forEach(opt => {
+          opt.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const parent = opt.closest('.accordion-filter');
+            const filterType = parent.dataset.filterType;
+            const value = opt.dataset.value;
+
+            // Update active state within this group
+            parent.querySelectorAll('.filter-opt').forEach(o => o.classList.remove('active'));
+            opt.classList.add('active');
+
+            // Update the trigger value display
+            const trigger = parent.querySelector('.accordion-trigger');
+            const valueSpan = trigger.querySelector('.accordion-value');
+            valueSpan.textContent = opt.textContent;
+
+            // Update filter state
+            recentFilters[filterType] = value;
+
+            // Collapse the accordion
+            parent.classList.remove('expanded');
+            trigger.classList.remove('expanded');
+            expandedAccordion = null;
+
             applyRecentFilters();
           });
         });
 
-        // Patch filters
-        filterContainer.querySelectorAll('[data-patch]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            filterContainer.querySelectorAll('[data-patch]').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            recentFilters.patch = btn.dataset.patch;
-            applyRecentFilters();
-          });
-        });
-
-        // KEV toggle
-        filterContainer.querySelectorAll('[data-kev]').forEach(btn => {
-          btn.addEventListener('click', () => {
-            btn.classList.toggle('active');
-            recentFilters.kev = btn.classList.contains('active');
-            applyRecentFilters();
-          });
+        // Close accordion when clicking outside
+        document.addEventListener('click', (e) => {
+          if (!e.target.closest('.accordion-filter')) {
+            filterContainer.querySelectorAll('.accordion-filter').forEach(af => {
+              af.classList.remove('expanded');
+              af.querySelector('.accordion-trigger').classList.remove('expanded');
+            });
+            expandedAccordion = null;
+          }
         });
 
         // Sort headers
@@ -322,7 +454,7 @@ export function generateRecentJs(): string {
 
       function applyRecentFilters() {
         let visibleCount = 0;
-        const searchLower = (currentSearch || '').toLowerCase();
+        const searchLower = (typeof currentSearch !== 'undefined' ? currentSearch : '').toLowerCase();
 
         recentRows.forEach(row => {
           const severity = row.dataset.severity;
@@ -340,7 +472,7 @@ export function generateRecentJs(): string {
           const matchesPatch = recentFilters.patch === 'all' || patch === recentFilters.patch;
 
           // KEV filter
-          const matchesKev = !recentFilters.kev || isKev;
+          const matchesKev = recentFilters.kev === 'all' || isKev;
 
           // Search filter
           const matchesSearch = searchLower === '' ||
