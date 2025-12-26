@@ -374,6 +374,12 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       <input type="text" class="search-box" id="searchBox" placeholder="Search CVE, vendor, product, description..." autofocus>
     </div>
 
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="kev">KEV Tracker</button>
+      <button class="tab-btn" data-tab="recent">Recent CVEs</button>
+    </nav>
+
+    <div id="kev-content" class="tab-content active">
     <div class="stats">
       <div class="stat-card unpatched">
         <div class="stat-number">${unpatched}</div>
@@ -398,13 +404,6 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       mentions "mitigations" rather than "updates", suggesting a full patch may not be available. Patch status
       is determined by checking NVD references. This is not a definitive source - always verify with vendor advisories.
     </div>
-
-    <nav class="tab-nav">
-      <button class="tab-btn active" data-tab="kev">KEV Tracker</button>
-      <button class="tab-btn" data-tab="recent">Recent CVEs</button>
-    </nav>
-
-    <div id="kev-content" class="tab-content active">
     <div class="filter-controls">
       <button class="filter-btn active" data-filter="all">All</button>
       <button class="filter-btn" data-filter="unpatched">Unpatched</button>
@@ -548,6 +547,10 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     searchBox.addEventListener('input', (e) => {
       currentSearch = e.target.value;
       applyFilters();
+      // Also filter recent CVEs if loaded
+      if (typeof applyRecentFilters === 'function') {
+        applyRecentFilters();
+      }
     });
 
     table.querySelectorAll('th[data-sort]').forEach(th => {
