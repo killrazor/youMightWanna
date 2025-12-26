@@ -191,3 +191,12 @@ resource "aws_route53_record" "www_alias_ipv6" {
     evaluate_target_health = false
   }
 }
+
+# Google Search Console verification
+resource "aws_route53_record" "google_verification" {
+  zone_id = data.aws_route53_zone.zone.id
+  name    = var.domain_name
+  type    = "TXT"
+  ttl     = 300
+  records = [var.google_site_verification]
+}

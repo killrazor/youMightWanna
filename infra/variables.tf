@@ -29,3 +29,9 @@ variable "acm_certificate_arn" {
   type        = string
   description = "ARN of an ACM certificate in us-east-1 covering your domain"
 }
+
+variable "google_site_verification" {
+  type        = string
+  description = "Google Search Console verification TXT record value"
+  default     = ""
+}

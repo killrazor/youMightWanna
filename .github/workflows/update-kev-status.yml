@@ -118,7 +118,8 @@ jobs:
                     -var="bucket_name=${{ secrets.S3_BUCKET }}" \
                     -var="domain_name=${{ vars.DOMAIN }}" \
                     -var="route53_zone_id=${{ secrets.ROUTE53_ZONE_ID }}" \
-                    -var="acm_certificate_arn=${{ secrets.ACM_CERT_ARN }}"
+                    -var="acm_certificate_arn=${{ secrets.ACM_CERT_ARN }}" \
+                    -var="google_site_verification=${{ vars.GOOGLE_SITE_VERIFICATION }}"
 
             - name: Get Terraform Outputs
               id: terraform_output
