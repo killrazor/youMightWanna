@@ -282,14 +282,15 @@ async function main(): Promise<void> {
     throttleState = await loadThrottleState();
   } else {
     // Without S3 cache, use defaults based on API key presence
-    // With API key: 50 req/30s = ~600ms minimum delay (use 700ms for safety margin)
-    // Without API key: 5 req/30s = 6000ms minimum delay
+    // With API key: 50 req/30s = 1 request per 600ms (use 650ms for safety margin)
+    // Without API key: 5 req/30s = 1 request per 6000ms
+    // Always use concurrency=1 to respect rolling window rate limits
     if (API_KEY) {
-      throttleState.concurrency = 5;
-      throttleState.delay_ms = 700;
+      throttleState.concurrency = 1;
+      throttleState.delay_ms = 650;
     } else {
       throttleState.concurrency = 1;
-      throttleState.delay_ms = 6000;
+      throttleState.delay_ms = 6500;
     }
     console.log(`      No S3 cache configured, using defaults: concurrency=${throttleState.concurrency}, delay=${throttleState.delay_ms}ms (API key: ${API_KEY ? 'yes' : 'no'})`);
   }

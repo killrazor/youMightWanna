@@ -1,6 +1,5 @@
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
-import type { ThrottleState } from './types.js';
-import { DEFAULT_THROTTLE, THROTTLE_BOUNDS } from './types.js';
+import { DEFAULT_THROTTLE, THROTTLE_BOUNDS, type ThrottleState } from './types.js';
 
 const THROTTLE_STATE_KEY = 'cache/throttle-state.json';
 
@@ -57,9 +56,20 @@ async function putObject<T>(key: string, data: T): Promise<boolean> {
 }
 
 // Load throttle state from S3, or return defaults
+// Validates loaded state against current bounds and resets if needed
 export async function loadThrottleState(): Promise<ThrottleState> {
   const state = await getObject<ThrottleState>(THROTTLE_STATE_KEY);
   if (state) {
+    // Validate concurrency is within bounds - reset if not
+    if (state.concurrency > THROTTLE_BOUNDS.max_concurrency) {
+      console.log(`      Cached throttle has invalid concurrency=${state.concurrency}, resetting to defaults`);
+      return { ...DEFAULT_THROTTLE };
+    }
+    // Validate delay is within bounds
+    if (state.delay_ms < THROTTLE_BOUNDS.min_delay_ms) {
+      console.log(`      Cached throttle has invalid delay=${state.delay_ms}ms, resetting to defaults`);
+      return { ...DEFAULT_THROTTLE };
+    }
     console.log(`      Loaded throttle state: concurrency=${state.concurrency}, delay=${state.delay_ms}ms`);
     return state;
   }

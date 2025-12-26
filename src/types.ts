@@ -70,11 +70,12 @@ export interface ThrottleState {
 }
 
 // Default throttle settings
-// With API key: 50 req/30s allows ~600ms delay
-// Without API key: 5 req/30s requires ~6000ms delay
+// With API key: 50 req/30s = 1 request per 600ms
+// Without API key: 5 req/30s = 1 request per 6000ms
+// Using concurrency=1 to ensure we respect rolling window limits
 export const DEFAULT_THROTTLE: ThrottleState = {
-  concurrency: 5,
-  delay_ms: 700,
+  concurrency: 1,
+  delay_ms: 650,
   last_429_at: null,
   last_success_at: null,
   consecutive_successes: 0,
@@ -82,16 +83,17 @@ export const DEFAULT_THROTTLE: ThrottleState = {
 };
 
 // Throttle bounds (for adaptive throttle with S3 cache)
+// Conservative bounds since we're using concurrency=1
 export const THROTTLE_BOUNDS = {
   min_concurrency: 1,
-  max_concurrency: 10,
-  min_delay_ms: 600,
+  max_concurrency: 1, // Keep at 1 to respect rolling window
+  min_delay_ms: 650,
   max_delay_ms: 10000,
   // Speed up after N consecutive successful runs
   speedup_threshold: 3,
   // How much to adjust on success/failure
-  concurrency_step: 1,
-  delay_step_ms: 200,
+  concurrency_step: 0, // Don't adjust concurrency
+  delay_step_ms: 50, // Small adjustments to delay
 };
 
 // ============================================
