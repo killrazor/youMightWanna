@@ -350,6 +350,9 @@ export function generateRecentJs(): string {
         renderGroups();
       }
 
+      // Store CVE data in JS instead of HTML attributes to avoid escaping issues
+      const groupCveData = new Map();
+
       function renderGroups() {
         const container = document.getElementById('recent-groups');
         let groups;
@@ -365,19 +368,26 @@ export function generateRecentJs(): string {
             groups = recentData.by_severity;
         }
 
-        container.innerHTML = groups.map(group => {
+        // Clear previous data
+        groupCveData.clear();
+
+        container.innerHTML = groups.map((group, index) => {
           const filteredCves = filterCves(group.cves);
           const isHidden = filteredCves.length === 0;
           const severityClass = currentGrouping === 'severity' ? group.key : '';
+          const groupId = currentGrouping + '-' + index;
+
+          // Store CVE data in Map instead of HTML attribute
+          groupCveData.set(groupId, filteredCves);
 
           return \`
-            <div class="cve-group\${isHidden ? ' hidden' : ''}" data-key="\${group.key}">
+            <div class="cve-group\${isHidden ? ' hidden' : ''}" data-group-id="\${groupId}">
               <button class="group-header" onclick="toggleGroup(this)">
                 <span class="chevron">▶</span>
                 \${severityClass ? \`<span class="severity-badge \${severityClass}">\${group.label}</span>\` : \`<span class="label">\${group.label}</span>\`}
                 <span class="count">\${filteredCves.length} CVEs</span>
               </button>
-              <div class="group-content" data-cves='\${JSON.stringify(filteredCves)}'></div>
+              <div class="group-content"></div>
             </div>
           \`;
         }).join('');
@@ -403,7 +413,8 @@ export function generateRecentJs(): string {
           // Render table in shadow DOM if not already done
           const content = group.querySelector('.group-content');
           if (!content.shadowRoot) {
-            const cves = JSON.parse(content.dataset.cves);
+            const groupId = group.dataset.groupId;
+            const cves = groupCveData.get(groupId) || [];
             const shadow = content.attachShadow({ mode: 'open' });
             shadow.innerHTML = \`${shadowStyles}\` + renderCveTable(cves);
           }
