@@ -56,35 +56,33 @@ async function putObject<T>(key: string, data: T): Promise<boolean> {
 }
 
 // Load throttle state from S3, or return defaults
-// Validates loaded state against current bounds and resets if needed
+// Only concurrency is actively used now - rate limiting is handled by sliding window in nvd.ts
 export async function loadThrottleState(): Promise<ThrottleState> {
   const state = await getObject<ThrottleState>(THROTTLE_STATE_KEY);
   if (state) {
-    // Validate concurrency is within bounds - reset if not
+    // Clamp concurrency to bounds (don't reset entirely, just adjust)
     if (state.concurrency > THROTTLE_BOUNDS.max_concurrency) {
-      console.log(`      Cached throttle has invalid concurrency=${state.concurrency}, resetting to defaults`);
-      return { ...DEFAULT_THROTTLE };
+      console.log(`      Cached throttle has concurrency=${state.concurrency}, clamping to max=${THROTTLE_BOUNDS.max_concurrency}`);
+      state.concurrency = THROTTLE_BOUNDS.max_concurrency;
     }
-    // Validate delay is within bounds
-    if (state.delay_ms < THROTTLE_BOUNDS.min_delay_ms) {
-      console.log(`      Cached throttle has invalid delay=${state.delay_ms}ms, resetting to defaults`);
-      return { ...DEFAULT_THROTTLE };
+    if (state.concurrency < THROTTLE_BOUNDS.min_concurrency) {
+      state.concurrency = THROTTLE_BOUNDS.min_concurrency;
     }
-    console.log(`      Loaded throttle state: concurrency=${state.concurrency}, delay=${state.delay_ms}ms`);
+    console.log(`      Loaded throttle state: concurrency=${state.concurrency}`);
     return state;
   }
-  console.log(`      Using default throttle: concurrency=${DEFAULT_THROTTLE.concurrency}, delay=${DEFAULT_THROTTLE.delay_ms}ms`);
+  console.log(`      Using default throttle: concurrency=${DEFAULT_THROTTLE.concurrency}`);
   return { ...DEFAULT_THROTTLE };
 }
 
 // Save throttle state to S3
 export async function saveThrottleState(state: ThrottleState): Promise<void> {
   if (await putObject(THROTTLE_STATE_KEY, state)) {
-    console.log(`      Saved throttle state: concurrency=${state.concurrency}, delay=${state.delay_ms}ms`);
+    console.log(`      Saved throttle state: concurrency=${state.concurrency}`);
   }
 }
 
-// Adjust throttle after a 429 error
+// Adjust throttle after a 429 error - reduce concurrency
 export function throttleBackoff(state: ThrottleState): ThrottleState {
   const now = new Date().toISOString();
   const newState = { ...state };
@@ -93,27 +91,21 @@ export function throttleBackoff(state: ThrottleState): ThrottleState {
   newState.consecutive_429s += 1;
   newState.consecutive_successes = 0;
 
-  // Reduce concurrency
+  // Reduce concurrency (rate limiting is handled separately by sliding window)
   if (newState.concurrency > THROTTLE_BOUNDS.min_concurrency) {
     newState.concurrency = Math.max(
       THROTTLE_BOUNDS.min_concurrency,
       newState.concurrency - THROTTLE_BOUNDS.concurrency_step
     );
+    console.log(`      Throttle backoff: concurrency reduced to ${newState.concurrency}`);
+  } else {
+    console.log(`      Throttle backoff: already at min concurrency=${newState.concurrency}`);
   }
 
-  // Increase delay
-  if (newState.delay_ms < THROTTLE_BOUNDS.max_delay_ms) {
-    newState.delay_ms = Math.min(
-      THROTTLE_BOUNDS.max_delay_ms,
-      newState.delay_ms + THROTTLE_BOUNDS.delay_step_ms * newState.consecutive_429s
-    );
-  }
-
-  console.log(`      Throttle backoff: concurrency=${newState.concurrency}, delay=${newState.delay_ms}ms`);
   return newState;
 }
 
-// Adjust throttle after a successful run (no 429s)
+// Adjust throttle after a successful run (no 429s) - increase concurrency
 export function throttleSpeedup(state: ThrottleState): ThrottleState {
   const now = new Date().toISOString();
   const newState = { ...state };
@@ -122,30 +114,26 @@ export function throttleSpeedup(state: ThrottleState): ThrottleState {
   newState.consecutive_successes += 1;
   newState.consecutive_429s = 0;
 
-  // Only speed up after N consecutive successes
+  // Only consider speeding up after N consecutive successes
   if (newState.consecutive_successes < THROTTLE_BOUNDS.speedup_threshold) {
     return newState;
   }
 
-  // Reset counter so we don't speed up every run
+  // Check if we can actually speed up
+  if (newState.concurrency >= THROTTLE_BOUNDS.max_concurrency) {
+    // Already at max concurrency, just keep counting successes
+    return newState;
+  }
+
+  // Reset counter since we're actually making a change
   newState.consecutive_successes = 0;
 
   // Increase concurrency
-  if (newState.concurrency < THROTTLE_BOUNDS.max_concurrency) {
-    newState.concurrency = Math.min(
-      THROTTLE_BOUNDS.max_concurrency,
-      newState.concurrency + THROTTLE_BOUNDS.concurrency_step
-    );
-  }
+  newState.concurrency = Math.min(
+    THROTTLE_BOUNDS.max_concurrency,
+    newState.concurrency + THROTTLE_BOUNDS.concurrency_step
+  );
 
-  // Decrease delay
-  if (newState.delay_ms > THROTTLE_BOUNDS.min_delay_ms) {
-    newState.delay_ms = Math.max(
-      THROTTLE_BOUNDS.min_delay_ms,
-      newState.delay_ms - THROTTLE_BOUNDS.delay_step_ms
-    );
-  }
-
-  console.log(`      Throttle speedup: concurrency=${newState.concurrency}, delay=${newState.delay_ms}ms`);
+  console.log(`      Throttle speedup: concurrency increased to ${newState.concurrency}`);
   return newState;
 }

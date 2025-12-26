@@ -59,10 +59,12 @@ export interface OutputData {
   vulnerabilities: CveResult[];
 }
 
-// Adaptive throttle state - persisted to S3
+// Throttle state - persisted to S3 for tracking 429 errors
+// Rate limiting is handled by sliding window algorithm in nvd.ts
+// This state is used for concurrency control and adaptive behavior
 export interface ThrottleState {
-  concurrency: number;
-  delay_ms: number;
+  concurrency: number;       // Number of concurrent requests allowed
+  delay_ms: number;          // Legacy - no longer used for rate limiting
   last_429_at: string | null;
   last_success_at: string | null;
   consecutive_successes: number;
@@ -70,30 +72,28 @@ export interface ThrottleState {
 }
 
 // Default throttle settings
-// With API key: 50 req/30s = 1 request per 600ms
-// Without API key: 5 req/30s = 1 request per 6000ms
-// Using concurrency=1 to ensure we respect rolling window limits
+// Rate limiting: 50 req/30s with API key, handled by sliding window in nvd.ts
+// Concurrency: controls how many requests can be in-flight at once
 export const DEFAULT_THROTTLE: ThrottleState = {
-  concurrency: 1,
-  delay_ms: 650,
+  concurrency: 2,            // Allow 2 concurrent requests
+  delay_ms: 0,               // Not used - rate limiting is in nvd.ts
   last_429_at: null,
   last_success_at: null,
   consecutive_successes: 0,
   consecutive_429s: 0,
 };
 
-// Throttle bounds (for adaptive throttle with S3 cache)
-// Conservative bounds since we're using concurrency=1
+// Throttle bounds (for adaptive concurrency with S3 cache)
 export const THROTTLE_BOUNDS = {
   min_concurrency: 1,
-  max_concurrency: 1, // Keep at 1 to respect rolling window
-  min_delay_ms: 650,
-  max_delay_ms: 10000,
+  max_concurrency: 3,
+  min_delay_ms: 0,           // Not used
+  max_delay_ms: 0,           // Not used
   // Speed up after N consecutive successful runs
   speedup_threshold: 3,
   // How much to adjust on success/failure
-  concurrency_step: 0, // Don't adjust concurrency
-  delay_step_ms: 50, // Small adjustments to delay
+  concurrency_step: 1,
+  delay_step_ms: 0,          // Not used
 };
 
 // ============================================

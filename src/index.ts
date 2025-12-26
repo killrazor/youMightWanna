@@ -50,8 +50,6 @@ const API_KEY = process.env.NVD_API_KEY;
 let throttleState: ThrottleState = { ...DEFAULT_THROTTLE };
 let had429Error = false;
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
 async function downloadKev(): Promise<KevCatalog> {
   console.log('[1/7] Downloading CISA KEV catalog...');
   const response = await fetch(CISA_KEV_URL);
@@ -76,64 +74,59 @@ function filterMitigationCves(kevData: KevCatalog): KevVulnerability[] {
 
 async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
   console.log('[3/7] Checking NVD for patch status...');
-  console.log(`      Using ${throttleState.concurrency} concurrent requests with ${throttleState.delay_ms}ms delay`);
+  // With API key: 50 requests per 30 seconds = ~600ms per request
+  // With concurrency, effective rate: ~600ms / concurrency
+  const apiKey = !!process.env.NVD_API_KEY;
+  const rateLimit = apiKey ? 50 : 5;
+  const windowSec = 30;
+  const effectiveDelayMs = (windowSec * 1000) / rateLimit;
+  console.log(`      Rate limit: ${rateLimit} requests per ${windowSec}s (${effectiveDelayMs.toFixed(0)}ms between requests)`);
 
   const total = cves.length;
-  const estMinutes = ((total / throttleState.concurrency) * throttleState.delay_ms) / 60000;
+  const estMinutes = (total * effectiveDelayMs) / 60000;
   console.log(`      Estimated time: ${estMinutes.toFixed(1)} minutes`);
 
+  // Use p-limit for concurrency control, rate limiting is handled by waitForRateLimit() in nvd.ts
   const limit = pLimit(throttleState.concurrency);
-  const results: CveResult[] = [];
   let completed = 0;
 
-  const batchSize = throttleState.concurrency;
-  for (let i = 0; i < cves.length; i += batchSize) {
-    const batch = cves.slice(i, i + batchSize);
+  const promises = cves.map((cve) =>
+    limit(async () => {
+      const cveId = cve.cveID || '';
+      const nvdResult = await checkNvdPatchStatus(cveId);
 
-    const batchPromises = batch.map((cve) =>
-      limit(async () => {
-        const cveId = cve.cveID || '';
-        const nvdResult = await checkNvdPatchStatus(cveId);
+      // Track 429 errors for adaptive throttle
+      if (nvdResult.error?.includes('429')) {
+        had429Error = true;
+      }
 
-        // Track 429 errors for adaptive throttle
-        if (nvdResult.error?.includes('429')) {
-          had429Error = true;
-        }
+      completed++;
+      const statusEmoji: Record<string, string> = {
+        PATCHED: '✓',
+        MITIGATION_ONLY: '⚠',
+        UNPATCHED: '✗',
+        ERROR: '!',
+      };
 
-        completed++;
-        const statusEmoji: Record<string, string> = {
-          PATCHED: '✓',
-          MITIGATION_ONLY: '⚠',
-          UNPATCHED: '✗',
-          ERROR: '!',
-        };
+      process.stdout.write(`\r      [${completed}/${total}] ${statusEmoji[nvdResult.status] || '?'} ${cveId}`);
 
-        process.stdout.write(`\r      [${completed}/${total}] ${statusEmoji[nvdResult.status] || '?'} ${cveId}`);
+      return {
+        cve_id: cveId,
+        vendor: cve.vendorProject || '',
+        product: cve.product || '',
+        vulnerability_name: cve.vulnerabilityName || '',
+        date_added: cve.dateAdded || '',
+        due_date: cve.dueDate || '',
+        required_action: cve.requiredAction || '',
+        known_ransomware: cve.knownRansomwareCampaignUse || 'Unknown',
+        short_description: cve.shortDescription || '',
+        notes: cve.notes || '',
+        ...nvdResult,
+      };
+    })
+  );
 
-        return {
-          cve_id: cveId,
-          vendor: cve.vendorProject || '',
-          product: cve.product || '',
-          vulnerability_name: cve.vulnerabilityName || '',
-          date_added: cve.dateAdded || '',
-          due_date: cve.dueDate || '',
-          required_action: cve.requiredAction || '',
-          known_ransomware: cve.knownRansomwareCampaignUse || 'Unknown',
-          short_description: cve.shortDescription || '',
-          notes: cve.notes || '',
-          ...nvdResult,
-        };
-      })
-    );
-
-    const batchResults = await Promise.all(batchPromises);
-    results.push(...batchResults);
-
-    if (i + batchSize < cves.length) {
-      await sleep(throttleState.delay_ms);
-    }
-  }
-
+  const results = await Promise.all(promises);
   console.log('\n');
   return results;
 }
@@ -282,17 +275,13 @@ async function main(): Promise<void> {
     throttleState = await loadThrottleState();
   } else {
     // Without S3 cache, use defaults based on API key presence
-    // With API key: 50 req/30s = 1 request per 600ms (use 650ms for safety margin)
-    // Without API key: 5 req/30s = 1 request per 6000ms
-    // Always use concurrency=1 to respect rolling window rate limits
+    // Rate limiting is handled by sliding window in nvd.ts, we just control concurrency
     if (API_KEY) {
-      throttleState.concurrency = 1;
-      throttleState.delay_ms = 650;
+      throttleState.concurrency = 2;
     } else {
       throttleState.concurrency = 1;
-      throttleState.delay_ms = 6500;
     }
-    console.log(`      No S3 cache configured, using defaults: concurrency=${throttleState.concurrency}, delay=${throttleState.delay_ms}ms (API key: ${API_KEY ? 'yes' : 'no'})`);
+    console.log(`      No S3 cache configured, using defaults: concurrency=${throttleState.concurrency} (API key: ${API_KEY ? 'yes' : 'no'})`);
   }
 
   const kevData = await downloadKev();
@@ -308,14 +297,11 @@ async function main(): Promise<void> {
   // Phase 2: Fetch recent CVEs in bulk
   console.log('[4/7] Fetching recent CVEs in bulk...');
   const kevCveIds = new Set(kevData.vulnerabilities?.map((v) => v.cveID) || []);
-  const recentResult = await fetchRecentCves(
-    {
-      daysBack: 60,
-      maxResults: limitArg ? Math.min(limitArg * 10, 500) : 5000, // Scale down for testing
-      kevCveIds,
-    },
-    throttleState
-  );
+  const recentResult = await fetchRecentCves({
+    daysBack: 60,
+    maxResults: limitArg ? Math.min(limitArg * 10, 500) : 5000, // Scale down for testing
+    kevCveIds,
+  });
 
   if (recentResult.had429) {
     had429Error = true;

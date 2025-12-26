@@ -7,7 +7,7 @@
  * - Vendor/product extraction from CPE strings
  */
 
-import type { NvdResult, RecentCve, BulkNvdOptions, ThrottleState } from './types.js';
+import type { NvdResult, RecentCve, BulkNvdOptions } from './types.js';
 
 const NVD_API_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 const API_KEY = process.env.NVD_API_KEY;
@@ -15,7 +15,47 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 5000;
 const RESULTS_PER_PAGE = 2000; // NVD API maximum
 
+// Rate limiting: 50 requests per 30 seconds with API key, 5 without
+const RATE_LIMIT_WINDOW_MS = 30000;
+const RATE_LIMIT_REQUESTS = API_KEY ? 50 : 5;
+
+// Track request timestamps for sliding window rate limiting
+const requestTimestamps: number[] = [];
+
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Wait if necessary to respect rate limits using sliding window algorithm
+ * Returns immediately if we haven't hit the limit, otherwise waits until we can make a request
+ */
+async function waitForRateLimit(): Promise<void> {
+  const now = Date.now();
+  const windowStart = now - RATE_LIMIT_WINDOW_MS;
+
+  // Remove timestamps outside the window
+  while (requestTimestamps.length > 0 && requestTimestamps[0] < windowStart) {
+    requestTimestamps.shift();
+  }
+
+  // If we're at the limit, wait until the oldest request expires from the window
+  if (requestTimestamps.length >= RATE_LIMIT_REQUESTS) {
+    const oldestInWindow = requestTimestamps[0];
+    const waitTime = oldestInWindow + RATE_LIMIT_WINDOW_MS - now + 100; // +100ms buffer
+    if (waitTime > 0) {
+      process.stdout.write(` [rate limit: waiting ${(waitTime / 1000).toFixed(1)}s]`);
+      await sleep(waitTime);
+    }
+    // Clean up again after waiting
+    const newNow = Date.now();
+    const newWindowStart = newNow - RATE_LIMIT_WINDOW_MS;
+    while (requestTimestamps.length > 0 && requestTimestamps[0] < newWindowStart) {
+      requestTimestamps.shift();
+    }
+  }
+
+  // Record this request
+  requestTimestamps.push(Date.now());
+}
 
 /**
  * Check NVD patch status for a single CVE
@@ -26,6 +66,9 @@ export async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promis
   if (API_KEY) headers['apiKey'] = API_KEY;
 
   try {
+    // Wait for rate limit before making request
+    await waitForRateLimit();
+
     const response = await fetch(`${NVD_API_URL}?cveId=${cveId}`, {
       headers,
       signal: AbortSignal.timeout(30000),
@@ -239,10 +282,10 @@ function extractFromDescription(description: string): { vendor: string; product:
 
 /**
  * Fetch recent CVEs in bulk using date-range query with pagination
+ * Rate limiting is handled automatically by waitForRateLimit()
  */
 export async function fetchRecentCves(
-  options: BulkNvdOptions,
-  throttleState: ThrottleState
+  options: BulkNvdOptions
 ): Promise<{ cves: RecentCve[]; had429: boolean }> {
   const { daysBack, maxResults, kevCveIds } = options;
 
@@ -274,6 +317,9 @@ export async function fetchRecentCves(
     // Retry loop for this page
     while (retryCount <= MAX_RETRIES) {
       try {
+        // Wait for rate limit before making request
+        await waitForRateLimit();
+
         response = await fetch(url, {
           headers,
           signal: AbortSignal.timeout(60000), // Longer timeout for bulk queries
@@ -329,11 +375,7 @@ export async function fetchRecentCves(
     }
 
     startIndex += RESULTS_PER_PAGE;
-
-    // Respect rate limits between pages
-    if (startIndex < totalResults && allCves.length < maxResults) {
-      await sleep(throttleState.delay_ms);
-    }
+    // Rate limiting is now handled by waitForRateLimit() at the start of each request
   } while (startIndex < totalResults && allCves.length < maxResults);
 
   console.log(`      Total fetched: ${allCves.length} CVEs`);
