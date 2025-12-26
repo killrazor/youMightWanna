@@ -17,7 +17,16 @@
 import { mkdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import pLimit from 'p-limit';
-import type { KevCatalog, KevVulnerability, NvdResult, CveResult, OutputData, ThrottleState } from './types.js';
+import type {
+  KevCatalog,
+  KevVulnerability,
+  CveResult,
+  OutputData,
+  ThrottleState,
+  RecentCveData,
+  CveGroup,
+  RecentCve,
+} from './types.js';
 import { DEFAULT_THROTTLE } from './types.js';
 import { generateHtml } from './template.js';
 import {
@@ -28,16 +37,14 @@ import {
   throttleBackoff,
   throttleSpeedup,
 } from './cache.js';
+import { checkNvdPatchStatus, fetchRecentCves } from './nvd.js';
 
 // Constants
 const CISA_KEV_URL = 'https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json';
-const NVD_API_URL = 'https://services.nvd.nist.gov/rest/json/cves/2.0';
 const OUTPUT_DIR = 'docs';
 
 // Rate limiting
 const API_KEY = process.env.NVD_API_KEY;
-const MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 5000; // Base delay for retries (exponential backoff)
 
 // Adaptive throttle state - loaded from S3 or defaults
 let throttleState: ThrottleState = { ...DEFAULT_THROTTLE };
@@ -46,7 +53,7 @@ let had429Error = false;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function downloadKev(): Promise<KevCatalog> {
-  console.log('[1/5] Downloading CISA KEV catalog...');
+  console.log('[1/7] Downloading CISA KEV catalog...');
   const response = await fetch(CISA_KEV_URL);
   if (!response.ok) throw new Error(`Failed to fetch KEV: ${response.status}`);
   const data = (await response.json()) as KevCatalog;
@@ -55,7 +62,7 @@ async function downloadKev(): Promise<KevCatalog> {
 }
 
 function filterMitigationCves(kevData: KevCatalog): KevVulnerability[] {
-  console.log("[2/5] Filtering CVEs with 'Apply mitigations' or 'discontinue use'...");
+  console.log("[2/7] Filtering CVEs with 'Apply mitigations' or 'discontinue use'...");
 
   const filtered = (kevData.vulnerabilities || []).filter((vuln) => {
     const action = (vuln.requiredAction || '').toLowerCase();
@@ -66,116 +73,9 @@ function filterMitigationCves(kevData: KevCatalog): KevVulnerability[] {
   return filtered;
 }
 
-async function checkNvdPatchStatus(cveId: string, retryCount = 0): Promise<NvdResult> {
-  const headers: Record<string, string> = {};
-  if (API_KEY) headers['apiKey'] = API_KEY;
-
-  try {
-    const response = await fetch(`${NVD_API_URL}?cveId=${cveId}`, {
-      headers,
-      signal: AbortSignal.timeout(30000),
-    });
-
-    // Handle rate limiting with retry
-    if (response.status === 429) {
-      if (retryCount < MAX_RETRIES) {
-        const delay = RETRY_DELAY_MS * Math.pow(2, retryCount); // Exponential backoff
-        process.stdout.write(` [429, retry in ${delay / 1000}s]`);
-        await sleep(delay);
-        return checkNvdPatchStatus(cveId, retryCount + 1);
-      }
-      throw new Error(`HTTP 429 after ${MAX_RETRIES} retries`);
-    }
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    let hasPatch = false;
-    let hasVendorAdvisory = false;
-    let hasMitigation = false;
-    const patchUrls: string[] = [];
-    let cvssScore: number | null = null;
-    let cvssSeverity: string | null = null;
-    let nvdPublished: string | null = null;
-
-    const vulnerabilities = data.vulnerabilities || [];
-    if (vulnerabilities.length > 0) {
-      const cveData = vulnerabilities[0].cve || {};
-      const references = cveData.references || [];
-
-      // Extract NVD published date
-      nvdPublished = cveData.published ? cveData.published.split('T')[0] : null;
-
-      // Extract CVSS score (prefer v3.1, fall back to v3.0, then v2.0)
-      const metrics = cveData.metrics || {};
-      if (metrics.cvssMetricV31?.[0]) {
-        cvssScore = metrics.cvssMetricV31[0].cvssData?.baseScore ?? null;
-        cvssSeverity = metrics.cvssMetricV31[0].cvssData?.baseSeverity ?? null;
-      } else if (metrics.cvssMetricV30?.[0]) {
-        cvssScore = metrics.cvssMetricV30[0].cvssData?.baseScore ?? null;
-        cvssSeverity = metrics.cvssMetricV30[0].cvssData?.baseSeverity ?? null;
-      } else if (metrics.cvssMetricV2?.[0]) {
-        cvssScore = metrics.cvssMetricV2[0].cvssData?.baseScore ?? null;
-        cvssSeverity = metrics.cvssMetricV2[0].baseSeverity ?? null;
-      }
-
-      for (const ref of references) {
-        const tags: string[] = ref.tags || [];
-        const url: string = ref.url || '';
-
-        if (tags.includes('Patch')) {
-          hasPatch = true;
-          patchUrls.push(url);
-        }
-        if (tags.includes('Vendor Advisory')) {
-          hasVendorAdvisory = true;
-        }
-        if (tags.includes('Mitigation')) {
-          hasMitigation = true;
-        }
-      }
-    }
-
-    let status: NvdResult['status'];
-    if (hasPatch) {
-      status = 'PATCHED';
-    } else if (hasVendorAdvisory || hasMitigation) {
-      status = 'MITIGATION_ONLY';
-    } else {
-      status = 'UNPATCHED';
-    }
-
-    return {
-      status,
-      has_patch: hasPatch,
-      has_vendor_advisory: hasVendorAdvisory,
-      has_mitigation: hasMitigation,
-      patch_urls: patchUrls,
-      cvss_score: cvssScore,
-      cvss_severity: cvssSeverity,
-      nvd_published: nvdPublished,
-      error: null,
-    };
-  } catch (e) {
-    return {
-      status: 'ERROR',
-      has_patch: false,
-      has_vendor_advisory: false,
-      has_mitigation: false,
-      patch_urls: [],
-      cvss_score: null,
-      cvss_severity: null,
-      nvd_published: null,
-      error: e instanceof Error ? e.message : String(e),
-    };
-  }
-}
 
 async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
-  console.log('[3/5] Checking NVD for patch status...');
+  console.log('[3/7] Checking NVD for patch status...');
   console.log(`      Using ${throttleState.concurrency} concurrent requests with ${throttleState.delay_ms}ms delay`);
 
   const total = cves.length;
@@ -238,6 +138,132 @@ async function checkAllCves(cves: KevVulnerability[]): Promise<CveResult[]> {
   return results;
 }
 
+/**
+ * Build the grouped output structure for recent CVEs
+ */
+function buildRecentCveOutput(cves: RecentCve[]): RecentCveData {
+  const now = new Date();
+  const sixtyDaysAgo = new Date();
+  sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+
+  // Calculate summary
+  const summary = {
+    critical: cves.filter((c) => c.cvss_severity === 'CRITICAL').length,
+    high: cves.filter((c) => c.cvss_severity === 'HIGH').length,
+    medium: cves.filter((c) => c.cvss_severity === 'MEDIUM').length,
+    low: cves.filter((c) => c.cvss_severity === 'LOW').length,
+    none: cves.filter((c) => !c.cvss_severity).length,
+    in_kev: cves.filter((c) => c.is_in_kev).length,
+    with_patch: cves.filter((c) => c.has_patch).length,
+  };
+
+  // Group by severity
+  const severityOrder = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', null];
+  const bySeverity: CveGroup[] = severityOrder.map((severity) => {
+    const groupCves = cves.filter((c) => c.cvss_severity === severity);
+    return {
+      key: severity?.toLowerCase() || 'none',
+      label: severity || 'None/Unknown',
+      count: groupCves.length,
+      cves: groupCves,
+    };
+  }).filter((g) => g.count > 0);
+
+  // Group by vendor (top 50 + Other)
+  const vendorCounts = new Map<string, RecentCve[]>();
+  for (const cve of cves) {
+    const vendor = cve.vendor || 'Unknown';
+    if (!vendorCounts.has(vendor)) {
+      vendorCounts.set(vendor, []);
+    }
+    vendorCounts.get(vendor)!.push(cve);
+  }
+
+  const sortedVendors = [...vendorCounts.entries()]
+    .sort((a, b) => b[1].length - a[1].length);
+
+  const byVendor: CveGroup[] = [];
+  const otherCves: RecentCve[] = [];
+
+  for (let i = 0; i < sortedVendors.length; i++) {
+    const [vendor, vendorCves] = sortedVendors[i];
+    if (i < 50) {
+      byVendor.push({
+        key: vendor.toLowerCase().replace(/\s+/g, '-'),
+        label: vendor,
+        count: vendorCves.length,
+        cves: vendorCves,
+      });
+    } else {
+      otherCves.push(...vendorCves);
+    }
+  }
+
+  if (otherCves.length > 0) {
+    byVendor.push({
+      key: 'other',
+      label: 'Other',
+      count: otherCves.length,
+      cves: otherCves,
+    });
+  }
+
+  // Group by week
+  const byWeek: CveGroup[] = [];
+  const weekGroups: { label: string; cves: RecentCve[] }[] = [
+    { label: 'This Week', cves: [] },
+    { label: 'Last Week', cves: [] },
+    { label: '2 Weeks Ago', cves: [] },
+    { label: 'Older', cves: [] },
+  ];
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const dayOfWeek = todayStart.getDay();
+  const thisWeekStart = new Date(todayStart);
+  thisWeekStart.setDate(todayStart.getDate() - dayOfWeek);
+
+  for (const cve of cves) {
+    const pubDate = new Date(cve.published);
+    const daysAgo = Math.floor((todayStart.getTime() - pubDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    if (pubDate >= thisWeekStart) {
+      weekGroups[0].cves.push(cve);
+    } else if (daysAgo < 14) {
+      weekGroups[1].cves.push(cve);
+    } else if (daysAgo < 21) {
+      weekGroups[2].cves.push(cve);
+    } else {
+      weekGroups[3].cves.push(cve);
+    }
+  }
+
+  for (let i = 0; i < weekGroups.length; i++) {
+    const { label, cves: weekCves } = weekGroups[i];
+    if (weekCves.length > 0) {
+      byWeek.push({
+        key: `week-${i}`,
+        label,
+        count: weekCves.length,
+        cves: weekCves,
+      });
+    }
+  }
+
+  return {
+    last_updated: now.toISOString(),
+    date_range: {
+      start: sixtyDaysAgo.toISOString().split('T')[0],
+      end: now.toISOString().split('T')[0],
+    },
+    total: cves.length,
+    summary,
+    by_severity: bySeverity,
+    by_vendor: byVendor,
+    by_week: byWeek,
+  };
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const limitIndex = args.indexOf('--limit');
@@ -271,7 +297,27 @@ async function main(): Promise<void> {
 
   const results = await checkAllCves(cves);
 
-  console.log('[4/5] Generating output files...');
+  // Phase 2: Fetch recent CVEs in bulk
+  console.log('[4/7] Fetching recent CVEs in bulk...');
+  const kevCveIds = new Set(kevData.vulnerabilities?.map((v) => v.cveID) || []);
+  const recentResult = await fetchRecentCves(
+    {
+      daysBack: 60,
+      maxResults: limitArg ? Math.min(limitArg * 10, 500) : 5000, // Scale down for testing
+      kevCveIds,
+    },
+    throttleState
+  );
+
+  if (recentResult.had429) {
+    had429Error = true;
+  }
+
+  // Build grouped recent CVE data
+  console.log('[5/7] Building recent CVE groups...');
+  const recentData = buildRecentCveOutput(recentResult.cves);
+
+  console.log('[6/7] Generating output files...');
   if (!existsSync(OUTPUT_DIR)) {
     await mkdir(OUTPUT_DIR, { recursive: true });
   }
@@ -296,6 +342,10 @@ async function main(): Promise<void> {
   await writeFile(`${OUTPUT_DIR}/data.json`, JSON.stringify(outputData, null, 2), 'utf-8');
   console.log(`      JSON data: ${OUTPUT_DIR}/data.json`);
 
+  // Write recent CVE data
+  await writeFile(`${OUTPUT_DIR}/recent.json`, JSON.stringify(recentData), 'utf-8');
+  console.log(`      Recent CVEs: ${OUTPUT_DIR}/recent.json (${recentData.total} CVEs)`);
+
   // Generate sitemap.xml
   const sitemap = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
@@ -318,12 +368,21 @@ Sitemap: https://youmightwanna.org/sitemap.xml`;
   console.log(`      Robots: ${OUTPUT_DIR}/robots.txt`);
 
   console.log();
-  console.log('[5/5] Summary');
+  console.log('[7/7] Summary');
   console.log('='.repeat(50));
+  console.log('KEV Tracker:');
   console.log(`   UNPATCHED:       ${outputData.summary.unpatched}`);
   console.log(`   MITIGATION ONLY: ${outputData.summary.mitigation_only}`);
   console.log(`   PATCHED:         ${outputData.summary.patched}`);
   console.log(`   ERRORS:          ${outputData.summary.errors}`);
+  console.log();
+  console.log('Recent CVEs:');
+  console.log(`   TOTAL:           ${recentData.total}`);
+  console.log(`   CRITICAL:        ${recentData.summary.critical}`);
+  console.log(`   HIGH:            ${recentData.summary.high}`);
+  console.log(`   MEDIUM:          ${recentData.summary.medium}`);
+  console.log(`   LOW:             ${recentData.summary.low}`);
+  console.log(`   IN KEV:          ${recentData.summary.in_kev}`);
 
   // Update and save throttle state if S3 cache is enabled
   if (isCacheEnabled()) {

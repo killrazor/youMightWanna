@@ -1,4 +1,5 @@
 import type { CveResult, KevCatalog } from './types.js';
+import { generateRecentTabHtml, generateRecentCss, generateRecentJs } from './recent-template.js';
 
 const escapeHtml = (str: string): string =>
   String(str || '')
@@ -183,6 +184,54 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     .stat-card.patched .stat-number { color: var(--green); }
     .stat-card.total .stat-number { color: var(--blue); }
 
+    /* Tab Navigation */
+    .tab-nav {
+      display: flex;
+      gap: 0;
+      margin-bottom: 30px;
+      border-bottom: 2px solid var(--border-color);
+    }
+
+    .tab-btn {
+      padding: 12px 24px;
+      border: none;
+      background: transparent;
+      color: var(--text-secondary);
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      position: relative;
+      transition: color 0.2s;
+    }
+
+    .tab-btn:hover {
+      color: var(--text-primary);
+    }
+
+    .tab-btn.active {
+      color: var(--blue);
+    }
+
+    .tab-btn.active::after {
+      content: '';
+      position: absolute;
+      bottom: -2px;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--blue);
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    ${generateRecentCss()}
+
     .filter-controls { margin-bottom: 20px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 
     .filter-btn {
@@ -350,6 +399,12 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
       is determined by checking NVD references. This is not a definitive source - always verify with vendor advisories.
     </div>
 
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="kev">KEV Tracker</button>
+      <button class="tab-btn" data-tab="recent">Recent CVEs</button>
+    </nav>
+
+    <div id="kev-content" class="tab-content active">
     <div class="filter-controls">
       <button class="filter-btn active" data-filter="all">All</button>
       <button class="filter-btn" data-filter="unpatched">Unpatched</button>
@@ -380,6 +435,9 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
     <div class="no-results" id="noResults" style="display: none;">
       No vulnerabilities match your search criteria.
     </div>
+    </div><!-- end #kev-content -->
+
+    ${generateRecentTabHtml()}
 
     <footer>
       <p>Data sourced from <a href="https://www.cisa.gov/known-exploited-vulnerabilities-catalog" target="_blank" rel="noopener">CISA KEV Catalog</a>
@@ -508,6 +566,38 @@ export function generateHtml(results: CveResult[], kevData: KevCatalog): string 
 
     // Initial sort by KEV Added date descending (most recently added to KEV first)
     sortTable('kevadded');
+
+    // Tab Navigation
+    const tabBtns = document.querySelectorAll('.tab-btn');
+    const tabContents = document.querySelectorAll('.tab-content');
+
+    tabBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const tabId = btn.dataset.tab;
+
+        // Update active tab button
+        tabBtns.forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // Show/hide tab content
+        tabContents.forEach(content => {
+          if (content.id === tabId + '-content') {
+            content.classList.add('active');
+            content.style.display = 'block';
+          } else {
+            content.classList.remove('active');
+            content.style.display = 'none';
+          }
+        });
+
+        // Lazy load recent CVEs when tab is clicked
+        if (tabId === 'recent' && typeof loadRecentCves === 'function') {
+          loadRecentCves();
+        }
+      });
+    });
+
+    ${generateRecentJs()}
   </script>
 </body>
 </html>`;

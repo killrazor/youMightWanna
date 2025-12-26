@@ -91,3 +91,60 @@ export const THROTTLE_BOUNDS = {
   concurrency_step: 1,
   delay_step_ms: 200,
 };
+
+// ============================================
+// Phase 2: Recent CVEs Types
+// ============================================
+
+// A CVE from bulk NVD query (lighter weight than CveResult)
+export interface RecentCve {
+  cve_id: string;
+  cvss_score: number | null;
+  cvss_severity: string | null; // CRITICAL, HIGH, MEDIUM, LOW
+  vendor: string;
+  product: string;
+  published: string; // YYYY-MM-DD
+  description: string; // Truncated to ~200 chars
+  has_patch: boolean;
+  is_in_kev: boolean; // Cross-referenced with KEV catalog
+}
+
+// A group of CVEs for UI rendering
+export interface CveGroup {
+  key: string;
+  label: string;
+  count: number;
+  cves: RecentCve[];
+}
+
+// Summary statistics for recent CVEs
+export interface RecentCveSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  none: number;
+  in_kev: number;
+  with_patch: number;
+}
+
+// Output structure for recent.json
+export interface RecentCveData {
+  last_updated: string;
+  date_range: {
+    start: string;
+    end: string;
+  };
+  total: number;
+  summary: RecentCveSummary;
+  by_severity: CveGroup[];
+  by_vendor: CveGroup[];
+  by_week: CveGroup[];
+}
+
+// Options for bulk NVD fetch
+export interface BulkNvdOptions {
+  daysBack: number;
+  maxResults: number;
+  kevCveIds: Set<string>;
+}
