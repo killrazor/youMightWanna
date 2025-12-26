@@ -63,7 +63,7 @@ resource "aws_cloudfront_distribution" "cdn" {
   enabled             = true
   is_ipv6_enabled     = true
   default_root_object = "index.html"
-  aliases             = [var.domain_name]
+  aliases             = [var.domain_name, "www.${var.domain_name}"]
 
   default_cache_behavior {
     allowed_methods        = ["GET", "HEAD", "OPTIONS"]
@@ -157,6 +157,32 @@ resource "aws_route53_record" "site_alias" {
 resource "aws_route53_record" "site_alias_ipv6" {
   zone_id = data.aws_route53_zone.zone.id
   name    = var.domain_name
+  type    = "AAAA"
+
+  alias {
+    name                   = aws_cloudfront_distribution.cdn.domain_name
+    zone_id                = aws_cloudfront_distribution.cdn.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+# www subdomain A record
+resource "aws_route53_record" "www_alias" {
+  zone_id = data.aws_route53_zone.zone.id
+  name    = "www.${var.domain_name}"
+  type    = "A"
+
+  alias {
+    name                   = aws_cloudfront_distribution.cdn.domain_name
+    zone_id                = aws_cloudfront_distribution.cdn.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
+# www subdomain AAAA record for IPv6
+resource "aws_route53_record" "www_alias_ipv6" {
+  zone_id = data.aws_route53_zone.zone.id
+  name    = "www.${var.domain_name}"
   type    = "AAAA"
 
   alias {
