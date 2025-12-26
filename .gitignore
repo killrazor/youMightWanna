@@ -23,3 +23,8 @@ Thumbs.db
 
 # Build output (deployed directly to S3)
 docs/
+
+# Terraform
+.terraform/
+*.tfvars
+!*.tfvars.example
